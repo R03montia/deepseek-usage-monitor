@@ -35,7 +35,7 @@ pip install pystray pillow
 
 ### 2. 获取 Token
 
-1. 打开 [platform.deepseek.com](https://platform.deepseek.com/usage) 并登录
+1. 使用**Chrome**浏览器打开 [platform.deepseek.com](https://platform.deepseek.com/usage) 并登录
 2. 按 **F12** → **控制台**，粘贴以下代码：
 
 ```js
@@ -132,7 +132,7 @@ pip install pystray pillow
 
 ### 2. Get Your Token
 
-1. Open [platform.deepseek.com](https://platform.deepseek.com/usage) and log in
+1. Open [platform.deepseek.com](https://platform.deepseek.com/usage) with **Chrome** and log in
 2. Press **F12** → **Console**, then paste:
 
 ```js
