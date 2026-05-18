@@ -1,18 +1,5 @@
-<input type="checkbox" id="lang" style="display:none;">
-<label for="lang" style="cursor:pointer;font-size:1.1em;user-select:none;display:inline-block;padding:6px 14px;border-radius:4px;background:#1a1a2e;color:#d0d0ea;border:1px solid #35355a;">
-🌐 切换语言 Switch Language
-</label>
-
-<style>
-#en { display:block; }
-#zh { display:none; }
-#lang:checked ~ #en { display:none; }
-#lang:checked ~ #zh { display:block; }
-</style>
-
----
-
-<div id="en">
+[中文](#deepseek-api-用量监控) | [English](#deepseek-monitor)
+------
 
 # DeepSeek Monitor
 
@@ -109,11 +96,9 @@ deepseek-widget/
 
 [CC BY-NC 4.0](LICENSE) — Attribution-NonCommercial 4.0 International
 
-</div>
+-----
 
-<div id="zh">
-
-# DeepSeek Monitor / DeepSeek API 用量监控
+# DeepSeek API 用量监控
 
 一个复古像素风桌面小组件，实时监控你的 DeepSeek API 用量。数据来自 [platform.deepseek.com](https://platform.deepseek.com/usage) 内部接口。
 
@@ -208,4 +193,4 @@ deepseek-widget/
 
 [CC BY-NC 4.0](LICENSE) — 署名-非商业使用 4.0 国际
 
-</div>
+
