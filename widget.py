@@ -126,7 +126,7 @@ class Widget:
         # Config
         self._interval = get_refresh_interval() * 1000
         self._hover_fade = get_hover_fade()
-        self._fade_busy = False
+        self._fade_job = None
 
         self.root = tk.Tk()
         self.root.title("DeepSeek Monitor")
@@ -359,19 +359,22 @@ class Widget:
     # ═══════════ HOVER FADE ═══════════
 
     def _on_hover_in(self, _):
-        if not self._fade_busy:
+        if self._hover_fade:
             self._fade_to(0.25)
 
     def _on_hover_out(self, _):
-        if not self._fade_busy:
+        if self._hover_fade:
             self._fade_to(0.96)
 
     def _fade_to(self, target: float):
-        self._fade_busy = True
+        if self._fade_job:
+            self.root.after_cancel(self._fade_job)
+            self._fade_job = None
+
         cur = float(self.root.attributes("-alpha"))
         if abs(cur - target) < 0.01:
-            self._fade_busy = False
             return
+
         step = 0.025 if target > cur else -0.025
         frames = int(abs(target - cur) / 0.025)
         if frames < 1:
@@ -382,9 +385,9 @@ class Widget:
             self.root.attributes("-alpha", max(0.05, min(a, 1.0)))
             if frame >= frames - 1:
                 self.root.attributes("-alpha", target)
-                self._fade_busy = False
+                self._fade_job = None
                 return
-            self.root.after(10, lambda: _step(frame + 1))
+            self._fade_job = self.root.after(10, lambda: _step(frame + 1))
 
         _step()
 
@@ -418,11 +421,18 @@ class Widget:
     def _ds(self, e):
         self._dx = e.x_root - self.root.winfo_x()
         self._dy = e.y_root - self.root.winfo_y()
+        if self._hover_fade:
+            if self._fade_job:
+                self.root.after_cancel(self._fade_job)
+                self._fade_job = None
+            self.root.attributes("-alpha", 0.96)
 
     def _dm(self, e):
         self.root.geometry(f"+{e.x_root-self._dx}+{e.y_root-self._dy}")
 
-    def _de(self, _): pass
+    def _de(self, _):
+        if self._hover_fade:
+            self._fade_to(0.25)
 
     def _pop(self, _):
         m = tk.Menu(self.root, tearoff=0, bg="#1a1a2e", fg=W0, font=self.f3)
