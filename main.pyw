@@ -90,6 +90,11 @@ def _create_tray_icon(widget: Widget) -> pystray.Icon:
                 checked=lambda item: widget.get_pin_window(),
             ),
             pystray.MenuItem(
+                "Auto Snap (Beta)",
+                widget.toggle_auto_snap,
+                checked=lambda item: widget.get_auto_snap(),
+            ),
+            pystray.MenuItem(
                 "Charts Panel",
                 widget.toggle_sidebar,
                 checked=lambda item: widget.get_sidebar_visible(),

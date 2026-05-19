@@ -106,3 +106,9 @@ def get_theme() -> str:
     """Return the color theme name (default Default)."""
     cfg = load_config()
     return cfg.get("theme", "Default")
+
+
+def get_auto_snap() -> bool:
+    """Return whether auto-snap-to-edge is enabled (default false)."""
+    cfg = load_config()
+    return bool(cfg.get("auto_snap", False))

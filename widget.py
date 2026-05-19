@@ -5,9 +5,10 @@ from tkinter import font as tkfont
 from datetime import datetime, date
 from typing import Any
 from itertools import cycle
+import threading
 
 from api import DeepSeekPlatform
-from config import get_refresh_interval, get_hover_fade, get_pin_window, get_currency, get_lite_mode, get_theme, load_config, save_config
+from config import get_refresh_interval, get_hover_fade, get_pin_window, get_currency, get_lite_mode, get_theme, get_auto_snap, load_config, save_config
 
 # ── Colors ─────────────────────────────────────────────────────────────────
 # Module-level color names — updated by apply_theme() at runtime.
@@ -260,9 +261,11 @@ class Widget:
         iw, ih = (W_LITE, H_LITE) if self._lite_mode else (W, H)
         self.root.geometry(f"{iw}x{ih}")
 
-        if self._hover_fade:
-            self.root.bind("<Enter>", self._on_hover_in)
-            self.root.bind("<Leave>", self._on_hover_out)
+        # Always bind hover fade handlers (they check self._hover_fade internally)
+        self.root.bind("<Enter>", self._on_hover_in)
+        self.root.bind("<Leave>", self._on_hover_out)
+        if not self._hover_fade:
+            self.root.attributes("-alpha", 0.96)
 
         self.f1 = tkfont.Font(family="Courier New", size=13, weight="bold")
         self.f2 = tkfont.Font(family="Courier New", size=11, weight="bold")
@@ -280,6 +283,20 @@ class Widget:
         self.sidebar_cv.pack(side="right", fill="both", expand=False)
 
         self._dd: list[str] = []
+        self._updating = False  # guard against stacked API calls
+        self._deferred_refresh_id = None  # cancelable deferred refresh timer
+
+        # Snap state
+        self._auto_snap = get_auto_snap()
+        self._snapped = False
+        self._snap_edge = None
+        self._peeking = False
+        self._snap_restore = {}
+        self._snap_after_id = None
+        self._peek_timer_id = None
+        self._snap_glow_items: list[str] = []
+        self._snap_click_unsnap = False  # True if _ds just unsnapped (prevent re-snap on click)
+        self._snap_animating = False     # True during snap/peek animation (suppress Leave events)
 
         # 拖拽事件：绑定到两个 canvas（root 不绑，避免重复触发）
         for widget in (self.cv, self.sidebar_cv):
@@ -291,6 +308,10 @@ class Widget:
         # 键盘快捷键：Ctrl+Tab 或 Ctrl+T 切换侧边栏
         self.root.bind("<Control-Tab>", lambda e: self.toggle_sidebar())
         self.root.bind("<Control-t>", lambda e: self.toggle_sidebar())
+
+        # Snap peek events — bound on root for whole-window coverage
+        self.root.bind("<Enter>", self._on_peek_enter, add="+")
+        self.root.bind("<Leave>", self._on_peek_leave, add="+")
 
         self._fetch_exchange_rate()
         self._apply_theme(self._theme)
@@ -427,6 +448,10 @@ class Widget:
         # ── Title ──
         cv.create_text(14, 22, text="TOKENS MONITOR",
                        font=self.f1, fill=W0, anchor="w")
+        if self._theme == "Midnight Glow":
+            x0 = 14 + self.f1.measure("TOKENS ")
+            rw = self.f1.measure("MONITOR")
+            cv.create_rectangle(x0, 24, x0 + rw, 26, fill=BLUE, outline="")
         cv.create_oval(W-28, 15, W-16, 27, fill=GREEN, outline="", tags="dot")
         cv.create_text(W-36, 22, text="", font=self.f3, fill=B1, anchor="e", tags="fcur")
         self._hr(12, 44, W-12)
@@ -504,6 +529,10 @@ class Widget:
 
         # ── Title ──
         cv.create_text(12, 16, text="TOKENS MONITOR", font=self.f2, fill=W0, anchor="w")
+        if self._theme == "Midnight Glow":
+            x0 = 12 + self.f2.measure("TOKENS ")
+            rw = self.f2.measure("MONITOR")
+            cv.create_rectangle(x0, 18, x0 + rw, 20, fill=BLUE, outline="")
         cv.create_oval(w-24, 11, w-14, 21, fill=GREEN, outline="", tags="dot")
         cv.create_text(w-30, 16, text="", font=self.f3, fill=B1, anchor="e", tags="fcur")
         for x in range(8, w-8, 8):
@@ -549,11 +578,38 @@ class Widget:
         return t
 
     def update_data(self):
-        self._data = self.api.fetch_all(target_date=date.today().isoformat())
-        self._draw()
+        """Thread-safe async data refresh — never blocks the main loop."""
+        if self._updating:
+            return
+        self._updating = True
+        threading.Thread(target=self._fetch_worker, daemon=True).start()
+
+    def _fetch_worker(self):
+        """Run API call in background thread, schedule draw on main thread."""
+        try:
+            data = self.api.fetch_all(target_date=date.today().isoformat())
+            self.root.after(0, self._on_fetch_done, data)
+        except Exception as exc:
+            self.root.after(0, self._on_fetch_error, str(exc))
+
+    def _on_fetch_done(self, data):
+        self._data = data
         self._quote = next(QUOTES)
+        self._draw()
+        self._updating = False
+
+    def _on_fetch_error(self, msg):
+        if self._data is None:
+            self._data = {}
+        self._data["error"] = msg
+        self._data["ok"] = False
+        self._draw()
+        self._updating = False
 
     def _draw(self):
+        # When snapped and not peeking, skip drawing — strip has no data items
+        if self._snapped and not self._peeking:
+            return
         self._z()
         cv = self.cv
         d = self._data or {}
@@ -695,6 +751,287 @@ class Widget:
         # ── Footer ──
         cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
 
+    # ═══════════ AUTO SNAP ═══════════
+
+    SNAP_THRESHOLD = 25       # px from edge to trigger snap
+    SNAP_STRIP = 10           # width of snapped strip
+
+    def _check_snap(self):
+        """After drag-end, check proximity to screen edges. Snap if close."""
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+
+        edge = None
+        if rx < self.SNAP_THRESHOLD:
+            edge = "left"
+        elif rx + rw > sw - self.SNAP_THRESHOLD:
+            edge = "right"
+        elif ry < self.SNAP_THRESHOLD:
+            edge = "top"
+
+        if edge:
+            self._snap_to_edge(edge)
+
+    def _do_deferred_refresh(self):
+        """Fire update_data if we're still peeked."""
+        self._deferred_refresh_id = None
+        if self._peeking:
+            self.update_data()
+
+    def _cancel_deferred_refresh(self):
+        """Cancel pending deferred refresh."""
+        if self._deferred_refresh_id is not None:
+            self.root.after_cancel(self._deferred_refresh_id)
+            self._deferred_refresh_id = None
+
+    def _snap_to_edge(self, edge: str):
+        """Animate window shrinking to a thin strip on the given edge."""
+        self._snapped = True
+        self._snap_edge = edge
+        self._snap_animating = True
+
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        sw = self.root.winfo_screenwidth()
+
+        self._snap_restore = dict(x=rx, y=ry, w=rw, h=rh, sidebar=self._sidebar_visible)
+
+        strip_w = self.SNAP_STRIP
+        if edge == "left":
+            new_x, new_y, new_w, new_h = 0, ry, strip_w, rh
+        elif edge == "right":
+            new_x, new_y, new_w, new_h = sw - strip_w, ry, strip_w, rh
+        else:
+            new_x, new_y, new_w, new_h = rx, 0, rw, strip_w
+
+        # Close sidebar before animation begins
+        if self._sidebar_visible:
+            self._sidebar_visible = False
+            self.sidebar_cv.delete("all")
+            self.sidebar_cv.config(width=0)
+
+        start_x, start_y, start_w, start_h = rx, ry, rw, rh
+        dx, dy, dw, dh = new_x - start_x, new_y - start_y, new_w - start_w, new_h - start_h
+        steps = 8
+
+        def _anim(i=0):
+            p = 1 - (1 - (i + 1) / steps) ** 2
+            self.root.geometry(f"{int(start_w + dw * p)}x{int(start_h + dh * p)}+{int(start_x + dx * p)}+{int(start_y + dy * p)}")
+            if i + 1 < steps:
+                self.root.after(16, lambda: _anim(i + 1))
+            else:
+                self.root.geometry(f"{new_w}x{new_h}+{new_x}+{new_y}")
+                self._snap_animating = False
+                self._draw_snap_indicator()
+
+        _anim()
+
+        try:
+            cfg = load_config()
+            if not cfg.get("auto_snap"):
+                cfg["auto_snap"] = True
+                save_config(cfg)
+        except Exception:
+            pass
+
+    def _draw_snap_indicator(self):
+        """Thin edge strip with theme-colored glow."""
+        self._clear_snap_indicator()
+        cv = self.cv
+        edge = self._snap_edge
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        accent = BLUE
+
+        cv.delete("all")
+        cv.create_rectangle(0, 0, w, h, fill=BG, outline="", tags="snap_bg")
+
+        if edge in ("left", "right"):
+            cx = w // 2
+            cv.create_rectangle(cx - 1, 1, cx + 2, h - 1, fill=accent, outline="", tags="snap_glow")
+            for off in (3, 6, 10):
+                cv.create_rectangle(cx - off, 2, cx + off, h - 2,
+                                    fill=BG, outline=accent, width=1, tags="snap_glow")
+        else:
+            cy = h // 2
+            cv.create_rectangle(2, cy - 1, w - 2, cy + 2, fill=accent, outline="", tags="snap_glow")
+            for off in (3, 6, 10):
+                cv.create_rectangle(4, cy - off, w - 4, cy + off,
+                                    fill=BG, outline=accent, width=1, tags="snap_glow")
+
+    def _clear_snap_indicator(self):
+        self.cv.delete("snap_bg", "snap_glow")
+
+    def _check_mouse_inside(self) -> bool:
+        """Return True if the mouse pointer is within the window bounds."""
+        try:
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            mx = self.root.winfo_pointerx()
+            my = self.root.winfo_pointery()
+            return rx <= mx <= rx + rw and ry <= my <= ry + rh
+        except Exception:
+            return False
+
+    def _on_peek_enter(self, _):
+        if not self._snapped or self._peeking or self._dragging or self._snap_animating:
+            return
+        if self._snap_after_id:
+            self.root.after_cancel(self._snap_after_id)
+            self._snap_after_id = None
+        self._start_peek()
+
+    def _on_peek_leave(self, _):
+        if not self._snapped or self._snap_animating:
+            return
+        # Double-check: ignore if mouse is still inside (prevents false leave during animation)
+        if self._check_mouse_inside():
+            return
+        if not self._peeking:
+            return  # Already a strip, no action needed
+        self._end_peek()
+
+    def _start_peek(self):
+        """Animate from strip to full restore geometry. Draw content AFTER animation."""
+        self._peeking = True
+        self._snap_animating = True
+        self._clear_snap_indicator()
+        target = self._snap_restore
+        start_x, start_y = self.root.winfo_rootx(), self.root.winfo_rooty()
+        start_w, start_h = self.root.winfo_width(), self.root.winfo_height()
+
+        steps = 8
+        dx, dy = target["x"] - start_x, target["y"] - start_y
+        dw, dh = target["w"] - start_w, target["h"] - start_h
+
+        def _anim(i=0):
+            p = 1 - (1 - (i + 1) / steps) ** 2
+            self.root.geometry(f"{int(start_w + dw * p)}x{int(start_h + dh * p)}+{int(start_x + dx * p)}+{int(start_y + dy * p)}")
+            if i + 1 < steps:
+                self.root.after(16, lambda: _anim(i + 1))
+            else:
+                self.root.geometry(f"{target['w']}x{target['h']}+{target['x']}+{target['y']}")
+                self._snap_animating = False
+                # Now draw everything — canvas is at final size, one draw pass
+                self.cv.delete("all")
+                self._dd.clear()
+                self._draw_static()
+                if target.get("sidebar") and not self._lite_mode:
+                    self._sidebar_visible = True
+                    self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+                    self._draw_charts()
+                self._draw()
+                # Deferred background refresh (cancelable)
+                self._deferred_refresh_id = self.root.after(200, self._do_deferred_refresh)
+
+        _anim()
+
+    def _end_peek(self):
+        if self._snap_after_id:
+            self.root.after_cancel(self._snap_after_id)
+        self._snap_after_id = self.root.after(1500, self._re_snap)
+
+    def _re_snap(self):
+        self._snap_after_id = None
+        self._cancel_deferred_refresh()
+        if not self._snapped or self._dragging:
+            return
+
+        self._peeking = False
+        self._snap_animating = True
+        edge = self._snap_edge
+        ry, rh = self._snap_restore["y"], self._snap_restore["h"]
+        rx, rw = self._snap_restore["x"], self._snap_restore["w"]
+        sw = self.root.winfo_screenwidth()
+
+        strip_w = self.SNAP_STRIP
+        if edge == "left":
+            new_x, new_y, new_w, new_h = 0, ry, strip_w, rh
+        elif edge == "right":
+            new_x, new_y, new_w, new_h = sw - strip_w, ry, strip_w, rh
+        else:
+            new_x, new_y, new_w, new_h = rx, 0, rw, strip_w
+
+        # Save sidebar state, close before animation
+        self._snap_restore["sidebar"] = self._sidebar_visible
+        if self._sidebar_visible:
+            self._sidebar_visible = False
+            self.sidebar_cv.delete("all")
+            self.sidebar_cv.config(width=0)
+
+        start_x, start_y = self.root.winfo_rootx(), self.root.winfo_rooty()
+        start_w, start_h = self.root.winfo_width(), self.root.winfo_height()
+        dx, dy = new_x - start_x, new_y - start_y
+        dw, dh = new_w - start_w, new_h - start_h
+        steps = 8
+
+        def _anim(i=0):
+            p = 1 - (1 - (i + 1) / steps) ** 2
+            self.root.geometry(f"{int(start_w + dw * p)}x{int(start_h + dh * p)}+{int(start_x + dx * p)}+{int(start_y + dy * p)}")
+            if i + 1 < steps:
+                self.root.after(16, lambda: _anim(i + 1))
+            else:
+                self.root.geometry(f"{new_w}x{new_h}+{new_x}+{new_y}")
+                self._snap_animating = False
+                self._draw_snap_indicator()
+
+        _anim()
+
+    def _unsnap(self):
+        """Restore full window from snapped state."""
+        if not self._snapped:
+            return
+        self._cancel_deferred_refresh()
+        if self._snap_after_id:
+            self.root.after_cancel(self._snap_after_id)
+            self._snap_after_id = None
+        if self._peek_timer_id:
+            self.root.after_cancel(self._peek_timer_id)
+            self._peek_timer_id = None
+
+        restore = self._snap_restore
+        had_sidebar = restore.get("sidebar", False)
+        self._snapped = False
+        self._peeking = False
+        self._snap_edge = None
+        self._snap_restore = {}
+
+        self.root.geometry(f"{restore['w']}x{restore['h']}+{restore['x']}+{restore['y']}")
+
+        self._clear_snap_indicator()
+        self.cv.delete("all")
+        self._dd.clear()
+        self._draw_static()
+        if had_sidebar:
+            self._sidebar_visible = True
+            self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+            self._draw_charts()
+        self.update_data()
+
+    def toggle_auto_snap(self) -> bool:
+        """Toggle auto-snap on/off. If turning off and currently snapped, unsnap."""
+        self._auto_snap = not self._auto_snap
+        if not self._auto_snap and self._snapped:
+            self.root.after(0, self._unsnap)
+        try:
+            cfg = load_config()
+            cfg["auto_snap"] = self._auto_snap
+            save_config(cfg)
+        except Exception:
+            pass
+        return self._auto_snap
+
+    def get_auto_snap(self) -> bool:
+        return self._auto_snap
+
     def _tick(self):
         self.update_data()
         self.root.after(self._interval, self._tick)
@@ -702,12 +1039,12 @@ class Widget:
     # ═══════════ HOVER FADE ═══════════
 
     def _on_hover_in(self, _):
-        if self._dragging:
+        if self._dragging or self._snapped or not self._hover_fade:
             return
         self._fade_to(0.25)
 
     def _on_hover_out(self, _):
-        if self._dragging:
+        if self._dragging or self._snapped or not self._hover_fade:
             return
         self._fade_to(0.96)
 
@@ -737,7 +1074,7 @@ class Widget:
         _step()
 
     def toggle_hover_fade(self) -> bool:
-        """Toggle hover-fade on/off. Bool flip immediate, tkinter calls scheduled."""
+        """Toggle hover-fade on/off."""
         self._hover_fade = not self._hover_fade
         try:
             from config import load_config, save_config
@@ -746,15 +1083,7 @@ class Widget:
             save_config(cfg)
         except Exception:
             pass
-
-        # Rebind hover events so toggle takes effect immediately.
-        # Unbind first to avoid duplicates when toggling on repeatedly.
-        self.root.unbind("<Enter>")
-        self.root.unbind("<Leave>")
-        if self._hover_fade:
-            self.root.bind("<Enter>", self._on_hover_in)
-            self.root.bind("<Leave>", self._on_hover_out)
-        else:
+        if not self._hover_fade:
             self.root.after(0, lambda: self.root.attributes("-alpha", 0.96))
         return self._hover_fade
 
@@ -769,6 +1098,16 @@ class Widget:
     def _ds(self, e):
         self._dx = e.x_root - self.root.winfo_x()
         self._dy = e.y_root - self.root.winfo_y()
+        # Unsnap if dragging from snapped state
+        self._snap_click_unsnap = False
+        if self._snapped:
+            # Save restore BEFORE unsnap (winfo_x/y won't update until next event loop)
+            saved = self._snap_restore
+            self._unsnap()
+            self._snap_click_unsnap = True
+            # Use SAVED geometry (not winfo_x/y which is still the old strip position)
+            self._dx = e.x_root - saved["x"]
+            self._dy = e.y_root - saved["y"]
         # Cancel fade, show full opacity during drag
         if self._fade_after_id is not None:
             self.root.after_cancel(self._fade_after_id)
@@ -781,6 +1120,9 @@ class Widget:
 
     def _de(self, _):
         self._dragging = False
+        if self._auto_snap and not self._snap_click_unsnap:
+            self._check_snap()
+        self._snap_click_unsnap = False
         # Determine correct fade state based on mouse position after drag
         try:
             mx = self.root.winfo_pointerx()
@@ -795,6 +1137,9 @@ class Widget:
             pass
 
     def _pop(self, _):
+        # Unsnap if right-clicking while snapped
+        if self._snapped and not self._peeking:
+            self._start_peek()
         m = tk.Menu(self.root, tearoff=0, bg="#1a1a2e", fg="#f0f0ff", font=self.f3)
         m.add_command(label="🔍 Refresh Now", command=self.update_data)
         m.add_separator()
@@ -806,6 +1151,9 @@ class Widget:
         # Pin toggle
         pin_label = "📌 Unpin Window" if self._pin_window else "📌 Pin Window"
         m.add_command(label=pin_label, command=self.toggle_pin)
+        # Auto-snap toggle
+        snap_label = "🧲 Unsnap (Beta)" if self._auto_snap else "🧲 Auto Snap (Beta)"
+        m.add_command(label=snap_label, command=self.toggle_auto_snap)
         m.add_separator()
 
         # Currency submenu
@@ -840,6 +1188,9 @@ class Widget:
 
     def toggle_lite_mode(self):
         """Toggle lite mode on/off. Redraws everything at new size."""
+        # Unsnap if currently snapped
+        if self._snapped:
+            self._unsnap()
         self._lite_mode = not self._lite_mode
         try:
             cfg = load_config()
