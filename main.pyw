@@ -114,7 +114,7 @@ def _create_tray_icon(widget: Widget) -> pystray.Icon:
                         checked=lambda item: widget.get_currency_code() == "USD",
                     ),
                     pystray.MenuItem(
-                        "CAD  C$",
+                        "CAD  $",
                         lambda: widget.set_currency("CAD"),
                         checked=lambda item: widget.get_currency_code() == "CAD",
                     ),
@@ -122,6 +122,41 @@ def _create_tray_icon(widget: Widget) -> pystray.Icon:
                         "JPY  ¥",
                         lambda: widget.set_currency("JPY"),
                         checked=lambda item: widget.get_currency_code() == "JPY",
+                    ),
+                ),
+            ),
+            pystray.MenuItem(
+                "Theme",
+                pystray.Menu(
+                    pystray.MenuItem(
+                        "Default",
+                        lambda: widget.apply_theme("Default"),
+                        checked=lambda item: widget.get_theme() == "Default",
+                    ),
+                    pystray.MenuItem(
+                        "Amber Glow",
+                        lambda: widget.apply_theme("Amber Glow"),
+                        checked=lambda item: widget.get_theme() == "Amber Glow",
+                    ),
+                    pystray.MenuItem(
+                        "Frost Blue",
+                        lambda: widget.apply_theme("Frost Blue"),
+                        checked=lambda item: widget.get_theme() == "Frost Blue",
+                    ),
+                    pystray.MenuItem(
+                        "Verdant Green",
+                        lambda: widget.apply_theme("Verdant Green"),
+                        checked=lambda item: widget.get_theme() == "Verdant Green",
+                    ),
+                    pystray.MenuItem(
+                        "Soft Pastel",
+                        lambda: widget.apply_theme("Soft Pastel"),
+                        checked=lambda item: widget.get_theme() == "Soft Pastel",
+                    ),
+                    pystray.MenuItem(
+                        "Midnight Glow",
+                        lambda: widget.apply_theme("Midnight Glow"),
+                        checked=lambda item: widget.get_theme() == "Midnight Glow",
                     ),
                 ),
             ),

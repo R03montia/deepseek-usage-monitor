@@ -7,9 +7,10 @@ from typing import Any
 from itertools import cycle
 
 from api import DeepSeekPlatform
-from config import get_refresh_interval, get_hover_fade, get_pin_window, get_currency, get_lite_mode, load_config, save_config
+from config import get_refresh_interval, get_hover_fade, get_pin_window, get_currency, get_lite_mode, get_theme, load_config, save_config
 
 # ── Colors ─────────────────────────────────────────────────────────────────
+# Module-level color names — updated by apply_theme() at runtime.
 BG      = "#0f0f1a"
 CARD    = "#19192e"
 B1      = "#6a6a8a"
@@ -32,6 +33,63 @@ PGCA    = "#e0af68"
 PGDA    = "#ff6b6b"
 
 MB      = "#2a2a3e"
+
+THEMES = {
+    "Default": {
+        "BG": "#0f0f1a", "CARD": "#19192e",
+        "B1": "#6a6a8a", "B2": "#4a4a6a", "BC": "#35355a",
+        "W0": "#f0f0ff", "W1": "#d0d0ea", "W2": "#b0b0cc",
+        "BLUE": "#7dcfff", "GREEN": "#9ece6a", "RED": "#ff6b6b",
+        "YELLOW": "#e0af68", "ORANGE": "#ff9e64", "PURPLE": "#bb9af7",
+        "PGB": "#2a2a3e", "PGFG": "#7aa2f7", "PGCA": "#e0af68", "PGDA": "#ff6b6b",
+        "MB": "#2a2a3e",
+    },
+    "Amber Glow": {
+        "BG": "#1a0a05", "CARD": "#2a1410",
+        "B1": "#b07050", "B2": "#804030", "BC": "#4a2820",
+        "W0": "#fff0e8", "W1": "#e8d0c0", "W2": "#c8a890",
+        "BLUE": "#ff8c42", "GREEN": "#d162a4", "RED": "#e05555",
+        "YELLOW": "#f0b060", "ORANGE": "#e06030", "PURPLE": "#c04080",
+        "PGB": "#3a2018", "PGFG": "#ff8c42", "PGCA": "#e0a060", "PGDA": "#e05040",
+        "MB": "#3a2018",
+    },
+    "Frost Blue": {
+        "BG": "#0a0f1a", "CARD": "#141e2e",
+        "B1": "#6070a0", "B2": "#405070", "BC": "#2a3550",
+        "W0": "#e8f0ff", "W1": "#c0d0ea", "W2": "#90a0c0",
+        "BLUE": "#5ba0d0", "GREEN": "#7bc8a4", "RED": "#e06060",
+        "YELLOW": "#d4b060", "ORANGE": "#c08050", "PURPLE": "#8890d0",
+        "PGB": "#1a2540", "PGFG": "#5ba0d0", "PGCA": "#88c0e8", "PGDA": "#e06060",
+        "MB": "#1a2540",
+    },
+    "Verdant Green": {
+        "BG": "#0a120a", "CARD": "#142214",
+        "B1": "#507050", "B2": "#305030", "BC": "#1e3a1e",
+        "W0": "#e8f0e8", "W1": "#c0d8c0", "W2": "#90b090",
+        "BLUE": "#60b0d0", "GREEN": "#6ab86a", "RED": "#e06060",
+        "YELLOW": "#c0c060", "ORANGE": "#c08040", "PURPLE": "#80a080",
+        "PGB": "#1e301e", "PGFG": "#6ab86a", "PGCA": "#b0b040", "PGDA": "#d06050",
+        "MB": "#1e301e",
+    },
+    "Soft Pastel": {
+        "BG": "#f2ecee", "CARD": "#ffffff",
+        "B1": "#c8b8bc", "B2": "#a89094", "BC": "#ddd0d4",
+        "W0": "#1a1020", "W1": "#403050", "W2": "#705880",
+        "BLUE": "#55cdfc", "GREEN": "#f7a8b8", "RED": "#e06070",
+        "YELLOW": "#d4a060", "ORANGE": "#e08050", "PURPLE": "#b080c0",
+        "PGB": "#e8e0e4", "PGFG": "#55cdfc", "PGCA": "#f7a8b8", "PGDA": "#e06070",
+        "MB": "#e8e0e4",
+    },
+    "Midnight Glow": {
+        "BG": "#0a0a0a", "CARD": "#1a1a1a",
+        "B1": "#505050", "B2": "#303030", "BC": "#2a2a2a",
+        "W0": "#f0f0f0", "W1": "#d0d0d0", "W2": "#a0a0a0",
+        "BLUE": "#ffa500", "GREEN": "#ffa500", "RED": "#e05050",
+        "YELLOW": "#ffbb40", "ORANGE": "#ff8800", "PURPLE": "#b07040",
+        "PGB": "#1a1a1a", "PGFG": "#ffa500", "PGCA": "#ffbb40", "PGDA": "#e05050",
+        "MB": "#1a1a1a",
+    },
+}
 
 W, H = 380, 350
 W_LITE, H_LITE = 310, 230
@@ -192,6 +250,7 @@ class Widget:
         self._sidebar_visible = False
         self._animating = False
         self._lite_mode = get_lite_mode()
+        self._theme = get_theme()
 
         self.root = tk.Tk()
         self.root.title("Tokens Monitor")
@@ -234,6 +293,7 @@ class Widget:
         self.root.bind("<Control-t>", lambda e: self.toggle_sidebar())
 
         self._fetch_exchange_rate()
+        self._apply_theme(self._theme)
         self._draw_static()
         self._tick()
 
@@ -286,6 +346,33 @@ class Widget:
 
     def get_pin_window(self) -> bool:
         return self._pin_window
+
+    def get_theme(self) -> str:
+        return self._theme
+
+    def _apply_theme(self, name: str):
+        """Apply theme colors to module-level globals and redraw."""
+        colors = THEMES.get(name, THEMES["Default"])
+        for k, v in colors.items():
+            globals()[k] = v
+        self._theme = name
+        self.root.configure(bg=BG)
+        self.cv.configure(bg=BG)
+        self.sidebar_cv.configure(bg=CARD)
+
+    def apply_theme(self, name: str):
+        """Public: apply theme, persist, redraw."""
+        self._apply_theme(name)
+        try:
+            cfg = load_config()
+            cfg["theme"] = self._theme
+            save_config(cfg)
+        except Exception:
+            pass
+        self.cv.delete("all")
+        self._dd.clear()
+        self._draw_static()
+        self.update_data()
 
     def get_lite_mode(self) -> bool:
         return self._lite_mode
@@ -708,7 +795,7 @@ class Widget:
             pass
 
     def _pop(self, _):
-        m = tk.Menu(self.root, tearoff=0, bg="#1a1a2e", fg=W0, font=self.f3)
+        m = tk.Menu(self.root, tearoff=0, bg="#1a1a2e", fg="#f0f0ff", font=self.f3)
         m.add_command(label="🔍 Refresh Now", command=self.update_data)
         m.add_separator()
         m.add_command(label="📊 Toggle Charts", command=self.toggle_sidebar)
@@ -722,7 +809,7 @@ class Widget:
         m.add_separator()
 
         # Currency submenu
-        curr_menu = tk.Menu(m, tearoff=0, bg="#1a1a2e", fg=W0, font=self.f3)
+        curr_menu = tk.Menu(m, tearoff=0, bg="#1a1a2e", fg="#f0f0ff", font=self.f3)
         currencies = [("CNY  ¥", "CNY"), ("USD  $", "USD"), ("CAD  $", "CAD"), ("JPY  ¥", "JPY")]
         for label, code in currencies:
             curr_menu.add_command(
@@ -730,6 +817,16 @@ class Widget:
                 command=lambda c=code: self.set_currency(c),
             )
         m.add_cascade(label="💱 Currency", menu=curr_menu)
+        m.add_separator()
+
+        # Theme submenu
+        theme_menu = tk.Menu(m, tearoff=0, bg="#1a1a2e", fg="#f0f0ff", font=self.f3)
+        for t_name in THEMES:
+            theme_menu.add_command(
+                label=f"{'✓ ' if self._theme == t_name else '   '}{t_name}",
+                command=lambda n=t_name: self.apply_theme(n),
+            )
+        m.add_cascade(label="🎨 Theme", menu=theme_menu)
         m.add_separator()
 
         m.add_command(label="🔄 Restart", command=self._restart)

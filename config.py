@@ -100,3 +100,9 @@ def get_lite_mode() -> bool:
     """Return whether lite mode is enabled (default false)."""
     cfg = load_config()
     return bool(cfg.get("lite_mode", False))
+
+
+def get_theme() -> str:
+    """Return the color theme name (default Default)."""
+    cfg = load_config()
+    return cfg.get("theme", "Default")
