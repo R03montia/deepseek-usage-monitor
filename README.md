@@ -47,7 +47,7 @@ JSON.parse(localStorage.getItem('userToken')).value
 ### 3. 运行
 
 ```bash
-python main.py
+双击 main.pyw
 ```
 
 首次启动会弹出对话框要求粘贴 token，随后自动保存到 `config.json`。
@@ -74,7 +74,7 @@ python main.py
 
 ```
 deepseek-widget/
-├── main.py              # 入口 + 系统托盘
+├── main.pyw             # 入口 + 系统托盘
 ├── widget.py            # 像素风界面
 ├── api.py               # 内部 API 客户端
 ├── config.py            # 配置管理器
@@ -144,7 +144,7 @@ JSON.parse(localStorage.getItem('userToken')).value
 ### 3. Run
 
 ```bash
-python main.py
+click main.pyw
 ```
 
 On first launch, a dialog prompts you to paste the token. It is saved in `config.json` afterward.
@@ -171,7 +171,7 @@ On first launch, a dialog prompts you to paste the token. It is saved in `config
 
 ```
 deepseek-widget/
-├── main.py              # Entry point + system tray
+├── main.pyw             # Entry point + system tray
 ├── widget.py            # Pixel-art GUI widget
 ├── api.py               # platform.deepseek.com internal API client
 ├── config.py            # Configuration manager

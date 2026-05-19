@@ -74,17 +74,93 @@ def _create_tray_icon(widget: Widget) -> pystray.Icon:
     icon = pystray.Icon(
         "deepseek-monitor",
         img,
-        "DeepSeek Monitor",
+        "Tokens Monitor",
         pystray.Menu(
             pystray.MenuItem("Show / Hide", _schedule(lambda: _toggle_window(widget))),
             pystray.MenuItem("Refresh", _schedule(widget.update_data)),
-            pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Hover Fade",
-                widget.toggle_hover_fade,
-                checked=lambda item: widget.get_hover_fade(),
+                "Pin Window",
+                widget.toggle_pin,
+                checked=lambda item: widget.get_pin_window(),
+            ),
+            pystray.MenuItem(
+                "Auto Snap (Beta)",
+                widget.toggle_auto_snap,
+                checked=lambda item: widget.get_auto_snap(),
+            ),
+            pystray.MenuItem(
+                "Charts Panel",
+                widget.toggle_sidebar,
+                checked=lambda item: widget.get_sidebar_visible(),
+            ),
+            pystray.MenuItem(
+                "Lite Mode",
+                widget.toggle_lite_mode,
+                checked=lambda item: widget.get_lite_mode(),
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Currency",
+                pystray.Menu(
+                    pystray.MenuItem(
+                        "CNY  ¥",
+                        lambda: widget.set_currency("CNY"),
+                        checked=lambda item: widget.get_currency_code() == "CNY",
+                    ),
+                    pystray.MenuItem(
+                        "USD  $",
+                        lambda: widget.set_currency("USD"),
+                        checked=lambda item: widget.get_currency_code() == "USD",
+                    ),
+                    pystray.MenuItem(
+                        "CAD  $",
+                        lambda: widget.set_currency("CAD"),
+                        checked=lambda item: widget.get_currency_code() == "CAD",
+                    ),
+                    pystray.MenuItem(
+                        "JPY  ¥",
+                        lambda: widget.set_currency("JPY"),
+                        checked=lambda item: widget.get_currency_code() == "JPY",
+                    ),
+                ),
+            ),
+            pystray.MenuItem(
+                "Theme",
+                pystray.Menu(
+                    pystray.MenuItem(
+                        "Default",
+                        lambda: widget.apply_theme("Default"),
+                        checked=lambda item: widget.get_theme() == "Default",
+                    ),
+                    pystray.MenuItem(
+                        "Amber Glow",
+                        lambda: widget.apply_theme("Amber Glow"),
+                        checked=lambda item: widget.get_theme() == "Amber Glow",
+                    ),
+                    pystray.MenuItem(
+                        "Frost Blue",
+                        lambda: widget.apply_theme("Frost Blue"),
+                        checked=lambda item: widget.get_theme() == "Frost Blue",
+                    ),
+                    pystray.MenuItem(
+                        "Verdant Green",
+                        lambda: widget.apply_theme("Verdant Green"),
+                        checked=lambda item: widget.get_theme() == "Verdant Green",
+                    ),
+                    pystray.MenuItem(
+                        "Soft Pastel",
+                        lambda: widget.apply_theme("Soft Pastel"),
+                        checked=lambda item: widget.get_theme() == "Soft Pastel",
+                    ),
+                    pystray.MenuItem(
+                        "Midnight Glow",
+                        lambda: widget.apply_theme("Midnight Glow"),
+                        checked=lambda item: widget.get_theme() == "Midnight Glow",
+                    ),
+                ),
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Restart", lambda: widget.root.after(0, widget._restart)),
             pystray.MenuItem("Exit", lambda: _do_exit(icon, widget)),
         ),
     )

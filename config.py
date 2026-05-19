@@ -78,7 +78,31 @@ def get_refresh_interval() -> int:
         return 10
 
 
-def get_hover_fade() -> bool:
-    """Return whether hover-fade is enabled (default true)."""
+def get_pin_window() -> bool:
+    """Return whether window is always-on-top (default true)."""
     cfg = load_config()
-    return bool(cfg.get("hover_fade", True))
+    return bool(cfg.get("pin_window", True))
+
+
+def get_currency() -> str:
+    """Return the display currency code (default CNY)."""
+    cfg = load_config()
+    return cfg.get("currency", "CNY")
+
+
+def get_lite_mode() -> bool:
+    """Return whether lite mode is enabled (default false)."""
+    cfg = load_config()
+    return bool(cfg.get("lite_mode", False))
+
+
+def get_theme() -> str:
+    """Return the color theme name (default Default)."""
+    cfg = load_config()
+    return cfg.get("theme", "Default")
+
+
+def get_auto_snap() -> bool:
+    """Return whether auto-snap-to-edge is enabled (default false)."""
+    cfg = load_config()
+    return bool(cfg.get("auto_snap", False))
