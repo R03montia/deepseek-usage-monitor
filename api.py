@@ -174,4 +174,30 @@ class DeepSeekPlatform:
         else:
             result["error"] = "ERR: Cannot fetch cost"
 
+        # ── Daily series for sidebar charts ────────────────────────
+        daily_series: list[dict] = []
+        if usage and cost:
+            usage_days = {d.get("date"): d for d in usage.get("days", [])}
+            cost_container = cost[0] if isinstance(cost, list) else cost
+            cost_days = {d.get("date"): d for d in cost_container.get("days", [])}
+            all_dates = sorted(set(list(usage_days) + list(cost_days)))
+            for date_str in all_dates:
+                day_usage = usage_days.get(date_str, {})
+                pt = ct = ch = cm = 0
+                for me in day_usage.get("data", []):
+                    for ut in me.get("usage", []):
+                        t = ut.get("type", ""); a = int(ut.get("amount", "0"))
+                        if t == "RESPONSE_TOKEN":          ct += a
+                        elif t == "PROMPT_CACHE_HIT_TOKEN": pt += a; ch += a
+                        elif t == "PROMPT_CACHE_MISS_TOKEN":pt += a; cm += a
+                        elif t == "PROMPT_TOKEN":           pt += a
+                dc = 0.0
+                for me in cost_days.get(date_str, {}).get("data", []):
+                    for c2 in me.get("usage", []):
+                        dc += float(c2.get("amount", "0"))
+                daily_series.append(dict(date=date_str, prompt=pt,
+                    completion=ct, total=pt+ct, cost=dc,
+                    cache_hit=ch, cache_miss=cm))
+        result["daily_series"] = daily_series
+
         return result

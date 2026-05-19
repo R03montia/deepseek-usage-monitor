@@ -34,6 +34,8 @@ PGDA    = "#ff6b6b"
 MB      = "#2a2a3e"
 
 W, H = 380, 350
+SIDEBAR_WIDTH = 200  # 侧边栏宽度
+
 
 # ── Rotating quotes ────────────────────────────────────────────────────────
 QUOTES = cycle([
@@ -83,9 +85,9 @@ QUOTES = cycle([
     "Sampling temperature: spicy or bland",
     "Prompt: the magic spell of the 21st century",
     "Tokens are just expensive Lego blocks",
-    "The API bill: motivation to write shorter prompts",
-    "AI didn't take your job, your prompt engineering did",
-    "I'd tell you a token joke, but it costs ¥0.0001",
+    "The Bill: motivation to write shorter prompts",
+    "AI didn't take your job, your prompt did",
+    "I'd tell you a token joke, but it costs ¥0.01",
     "V4: still cheaper than therapy",
     "The cache hit rate is 100% in my dreams",
     "Keep calm and cache on",
@@ -116,6 +118,11 @@ def _2(v):
     except: return "--"
 
 
+def _fmt_num(v):
+    try: return f"{int(v):,}"
+    except: return "--"
+
+
 class Widget:
     def __init__(self, token: str):
         self.api = DeepSeekPlatform(token)
@@ -128,6 +135,8 @@ class Widget:
         self._hover_fade = get_hover_fade()
         self._fade_after_id = None
         self._dragging = False
+        self._sidebar_visible = False
+        self._animating = False
 
         self.root = tk.Tk()
         self.root.title("DeepSeek Monitor")
@@ -145,16 +154,28 @@ class Widget:
         self.f3 = tkfont.Font(family="Courier New", size=10)
         self.f5 = tkfont.Font(family="Courier New", size=26, weight="bold")
 
+        # 主Canvas（左侧信息面板）
         self.cv = tk.Canvas(self.root, width=W, height=H,
                             bg=BG, highlightthickness=0, bd=0)
-        self.cv.pack(fill="both", expand=True)
+        self.cv.pack(side="left", fill="both", expand=False)
+
+        # 侧边栏Canvas（图表区域）
+        self.sidebar_cv = tk.Canvas(self.root, width=0, height=H,
+                                   bg=CARD, highlightthickness=0, bd=0)
+        self.sidebar_cv.pack(side="right", fill="both", expand=False)
+
         self._dd: list[str] = []
 
-        self.cv.bind("<Button-1>", self._ds)
-        self.cv.bind("<B1-Motion>", self._dm)
-        self.cv.bind("<ButtonRelease-1>", self._de)
-        self.cv.bind("<Button-3>", self._pop)
-        self.root.bind("<Button-3>", self._pop)
+        # 拖拽事件：绑定到两个 canvas（root 不绑，避免重复触发）
+        for widget in (self.cv, self.sidebar_cv):
+            widget.bind("<Button-1>", self._ds)
+            widget.bind("<B1-Motion>", self._dm)
+            widget.bind("<ButtonRelease-1>", self._de)
+            widget.bind("<Button-3>", self._pop)
+        self.root.bind("<Button-3>", self._pop)  # 任意位置右键菜单（已有，加在 sidebar 上方的安全网）
+        # 键盘快捷键：Ctrl+Tab 或 Ctrl+T 切换侧边栏
+        self.root.bind("<Control-Tab>", lambda e: self.toggle_sidebar())
+        self.root.bind("<Control-t>", lambda e: self.toggle_sidebar())
 
         self._draw_static()
         self._tick()
@@ -345,6 +366,10 @@ class Widget:
         cv.create_text(W-18, 180, text=f"¥{_4(d.get('today_cost',0))}",
                        font=self.f2, fill=BLUE, anchor="e", tags=self._tg())
 
+        # 侧边栏图表同步刷新
+        if self._sidebar_visible:
+            self._draw_charts()
+
         # ── Footer ──
         mt = d.get("monthly_tokens", 0)
         cv.itemconfig("fm",
@@ -419,6 +444,9 @@ class Widget:
     def get_hover_fade(self) -> bool:
         return self._hover_fade
 
+    def get_sidebar_visible(self) -> bool:
+        return self._sidebar_visible
+
     # ═══════════ EVENTS ═══════════
 
     def _ds(self, e):
@@ -453,6 +481,8 @@ class Widget:
         m = tk.Menu(self.root, tearoff=0, bg="#1a1a2e", fg=W0, font=self.f3)
         m.add_command(label="Refresh Now", command=self.update_data)
         m.add_separator()
+        m.add_command(label="📊 Toggle Charts", command=self.toggle_sidebar)
+        m.add_separator()
         m.add_command(label="Exit", command=self._ex)
         try: m.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
         finally: m.grab_release()
@@ -460,6 +490,282 @@ class Widget:
     def _ex(self):
         self.root.quit()
         self.root.destroy()
+
+    def toggle_sidebar(self):
+        """切换侧边栏显示/隐藏，带动画"""
+        if self._animating:
+            return
+        self._hide_bar_tooltip()
+        self._sidebar_visible = not self._sidebar_visible
+        # 展开前先画出图表，动画过程中内容立即可见
+        if self._sidebar_visible:
+            self._draw_charts()
+        self._animate_sidebar()
+
+    def _animate_sidebar(self):
+        """Ease-out 动画：同步缩放侧边栏 Canvas 和根窗口宽度"""
+        self._animating = True
+        target_w = SIDEBAR_WIDTH if self._sidebar_visible else 0
+        start_root_w = self.root.winfo_width()
+        end_root_w = W + target_w
+        steps = 10
+
+        def step(i=0):
+            # ease-out quad: 先快后慢
+            p = 1 - (1 - (i + 1) / steps) ** 2
+            cur_w = int(target_w * p) if target_w > 0 else int(SIDEBAR_WIDTH * (1 - p))
+            cur_root = int(start_root_w + (end_root_w - start_root_w) * p)
+            self.sidebar_cv.config(width=cur_w)
+            self.root.geometry(f"{cur_root}x{H}")
+            if i + 1 < steps:
+                self.root.after(16, lambda: step(i + 1))
+            else:
+                self.sidebar_cv.config(width=target_w)
+                self.root.geometry(f"{end_root_w}x{H}")
+                if not self._sidebar_visible:
+                    self.sidebar_cv.delete("all")
+                self._animating = False
+
+        step()
+
+    def _draw_charts(self):
+        """绘制侧边栏：月度趋势图，赛博像素风格"""
+        self.sidebar_cv.delete("all")
+        d = self._data
+        if not d:
+            return
+
+        w = SIDEBAR_WIDTH
+        series = d.get("daily_series", [])
+        if not series:
+            self.sidebar_cv.create_text(w // 2, H // 2,
+                                        text="No data yet", font=self.f3, fill=B1, anchor="center")
+            return
+
+        # 外侧像素边框（与主窗口一致）
+        self.sidebar_cv.create_rectangle(2, 2, w - 2, H - 2, outline=B1, width=2)
+        self.sidebar_cv.create_rectangle(6, 6, w - 6, H - 6, outline=B2, width=1)
+
+        # ── 顶栏标题 ──
+        self.sidebar_cv.create_text(w // 2, 16, text="◈ MONTHLY TRENDS ◈",
+                                    font=self.f2, fill=BLUE, anchor="center")
+        self.sidebar_cv.create_line(10, 26, w - 10, 26, fill=BC, width=1)
+
+        # ── 卡片 1：Token 柱状图（赛博蓝） ──
+        self._draw_token_chart(w, 34)
+
+        # ── 卡片 2：费用柱状图（琥珀金） ──
+        self._draw_cost_chart(w, 196)
+
+    # ═══════════ TOKEN CHART ═══════════
+
+    def _draw_token_chart(self, w, y0):
+        """Token 月度柱状图 — 赛博朋克风格，蓝色调"""
+        series = (self._data or {}).get("daily_series", [])
+        if not series:
+            return
+
+        pad = 8
+        cw = w - pad * 2
+        ch = 148
+        bx = pad + 4
+        by = y0 + 28
+        bw = cw - 8
+        bh = ch - 40
+
+        # 卡片背景
+        self.sidebar_cv.create_rectangle(pad, y0, pad + cw, y0 + ch,
+                                         fill=PGB, outline=BC, width=1)
+
+        # ── 标题栏 ──
+        # 左上装饰符 + 标签
+        self.sidebar_cv.create_text(pad + 5, y0 + 5, text="◆", font=self.f3, fill=BLUE, anchor="w")
+        self.sidebar_cv.create_text(pad + 17, y0 + 5, text="TOKEN", font=self.f2, fill=BLUE, anchor="w")
+        # 右上总值
+        total_val = sum(d["total"] for d in series)
+        self.sidebar_cv.create_text(pad + cw - 5, y0 + 5, text=f"{total_val:,}",
+                                    font=self.f2, fill=W0, anchor="e")
+        # 分隔虚线
+        for x in range(pad + 4, pad + cw - 2, 6):
+            self.sidebar_cv.create_rectangle(x, y0 + 22, x + 3, y0 + 23, fill=B2, outline="")
+
+        # ── 计算柱子参数 ──
+        max_val = max(d["total"] for d in series) or 1
+        n = len(series)
+        gap = max(2, bw // 55)
+        bar_w = max(3, (bw - gap * (n - 1)) / n)
+        today_str = date.today().isoformat()
+
+        # ── 辅助网格线（三条） ──
+        for frac in (0.25, 0.50, 0.75):
+            gy = by + int(bh * (1 - frac))
+            self.sidebar_cv.create_line(bx, gy, bx + bw, gy, fill="#252545", width=1)
+            self.sidebar_cv.create_text(bx + 2, gy, text=f"{int(frac*100)}%",
+                                        font=("Courier New", 6), fill=B2, anchor="sw")
+
+        # ── 日均 Token 虚线 ──
+        avg_val = total_val / n
+        avg_y = by + bh - int(bh * avg_val / max_val)
+        self.sidebar_cv.create_line(bx, avg_y, bx + bw, avg_y, fill=BLUE, width=1, dash=(3, 3))
+        self.sidebar_cv.create_text(bx + bw, avg_y - 2, text=f"avg {avg_val:,.0f}",
+                                    font=("Courier New", 6), fill=BLUE, anchor="se")
+
+        # ── 绘制每个柱子（统一蓝，无高亮） ──
+        for i, day in enumerate(series):
+            x = bx + i * (bar_w + gap)
+            h = max(2, int(bh * day["total"] / max_val))
+            y = by + bh - h
+            is_today = day["date"] == today_str
+            tag = f"bar_token_{i}"
+
+            self.sidebar_cv.create_rectangle(x, y, x + bar_w, by + bh,
+                                             fill="#5a7acc", outline="", tags=tag)
+            self.sidebar_cv.create_rectangle(x, y, x + bar_w, y + 2,
+                                             fill="#8aacff", outline="", tags=tag)
+
+            self.sidebar_cv.tag_bind(tag, "<Enter>",
+                lambda e, d=day: self._show_bar_tooltip(e, d))
+            self.sidebar_cv.tag_bind(tag, "<Leave>",
+                lambda e: self._hide_bar_tooltip())
+
+            # 日期标签
+            n_days = len(series)
+            lbl_int = 5 if n_days > 15 else (3 if n_days > 8 else 2)
+            day_num = day["date"].split("-")[2].lstrip("0")
+            if day_num and (i == 0 or i == n_days - 1 or int(day_num) % lbl_int == 0 or is_today):
+                self.sidebar_cv.create_text(x + bar_w / 2, by + bh + 4, text=day_num,
+                                            font=("Courier New", 7), fill=W2 if is_today else B1, anchor="n")
+
+    # ═══════════ COST CHART ═══════════
+
+    def _draw_cost_chart(self, w, y0):
+        """费用月度柱状图 — 琥珀金风格，带均价参考线"""
+        series = (self._data or {}).get("daily_series", [])
+        if not series:
+            return
+
+        pad = 8
+        cw = w - pad * 2
+        ch = 132
+        bx = pad + 4
+        by = y0 + 28
+        bw = cw - 8
+        bh = ch - 40
+
+        # 卡片背景
+        self.sidebar_cv.create_rectangle(pad, y0, pad + cw, y0 + ch,
+                                         fill=PGB, outline=BC, width=1)
+
+        # ── 标题栏 ──
+        self.sidebar_cv.create_text(pad + 5, y0 + 5, text="◈", font=self.f3, fill=PGCA, anchor="w")
+        self.sidebar_cv.create_text(pad + 17, y0 + 5, text="COST", font=self.f2, fill=PGCA, anchor="w")
+        total_val = sum(d["cost"] for d in series)
+        self.sidebar_cv.create_text(pad + cw - 5, y0 + 5, text=f"¥{_4(total_val)}",
+                                    font=self.f2, fill=W0, anchor="e")
+        for x in range(pad + 4, pad + cw - 2, 6):
+            self.sidebar_cv.create_rectangle(x, y0 + 22, x + 3, y0 + 23, fill=B2, outline="")
+
+        # ── 柱子 & 均线参数 ──
+        max_val = max(d["cost"] for d in series) or 1
+        n = len(series)
+
+        # ── 均价虚线 ──
+        avg_val = total_val / n
+        avg_y = by + bh - int(bh * avg_val / max_val)
+        self.sidebar_cv.create_line(bx, avg_y, bx + bw, avg_y, fill=PGCA, width=1, dash=(3, 3))
+        self.sidebar_cv.create_text(bx + bw, avg_y - 2, text=f"avg ¥{avg_val:.4f}",
+                                    font=("Courier New", 6), fill=PGCA, anchor="se")
+
+        # ── 辅助网格线 ──
+        for frac in (0.25, 0.50, 0.75):
+            gy = by + int(bh * (1 - frac))
+            self.sidebar_cv.create_line(bx, gy, bx + bw, gy, fill="#2a2a20", width=1)
+
+        # ── 柱子几何 ──
+        gap = max(2, bw // 55)
+        gap = max(2, bw // 55)
+        bar_w = max(3, (bw - gap * (n - 1)) / n)
+        today_str = date.today().isoformat()
+
+        for i, day in enumerate(series):
+            x = bx + i * (bar_w + gap)
+            h = max(2, int(bh * day["cost"] / max_val))
+            y = by + bh - h
+            is_today = day["date"] == today_str
+            tag = f"bar_cost_{i}"
+
+            self.sidebar_cv.create_rectangle(x, y, x + bar_w, by + bh,
+                                             fill="#a08040", outline="", tags=tag)
+            self.sidebar_cv.create_rectangle(x, y, x + bar_w, y + 2,
+                                             fill="#c8a860", outline="", tags=tag)
+
+            self.sidebar_cv.tag_bind(tag, "<Enter>",
+                lambda e, d=day: self._show_bar_tooltip(e, d))
+            self.sidebar_cv.tag_bind(tag, "<Leave>",
+                lambda e: self._hide_bar_tooltip())
+
+            # 日期标签
+            n_days = len(series)
+            lbl_int = 5 if n_days > 15 else (3 if n_days > 8 else 2)
+            day_num = day["date"].split("-")[2].lstrip("0")
+            if day_num and (i == 0 or i == n_days - 1 or int(day_num) % lbl_int == 0 or is_today):
+                self.sidebar_cv.create_text(x + bar_w / 2, by + bh + 4, text=day_num,
+                                            font=("Courier New", 7), fill=W2 if is_today else B1, anchor="n")
+
+    # ═══════════ BAR TOOLTIP ═══════════
+
+    def _show_bar_tooltip(self, event, day):
+        """鼠标悬停柱子时弹出详细信息浮窗"""
+        self._hide_bar_tooltip()
+        d = day
+        is_today = d["date"] == date.today().isoformat()
+        accent = PGCA if is_today else BLUE
+
+        # 用 Toplevel bg 做 1px 外框
+        tt = tk.Toplevel(self.root)
+        tt.overrideredirect(True)
+        tt.attributes("-topmost", True)
+        tt.configure(bg=accent)
+
+        # 顶部色条（3px）
+        tk.Frame(tt, bg=accent, height=3).pack(fill="x")
+
+        # 内容
+        bullet = "★" if is_today else "●"
+        lines = [
+            f"  {bullet} {d['date']}  ",
+            f"  {'─' * 16}  ",
+            f"  Prompt     {d['prompt']:>8,}",
+            f"  Completion {d['completion']:>8,}",
+            f"  Total      {d['total']:>8,}",
+            f"  {'─' * 16}  ",
+            f"  Cache Hit  {d['cache_hit']:>8,}",
+            f"  Cache Miss {d['cache_miss']:>8,}",
+            f"  {'─' * 16}  ",
+            f"  Cost       ¥{d['cost']:.4f}",
+        ]
+        text = "\n".join(lines)
+
+        lbl = tk.Label(tt, text=text, bg=CARD, fg=W0, font=self.f3,
+                       padx=6, pady=6)
+        lbl.pack(padx=1, pady=(0, 1))
+
+        x = event.x_root + 14
+        y = event.y_root + 10
+        tt.geometry(f"+{x}+{y}")
+        self._tooltip = tt
+
+    def _hide_bar_tooltip(self):
+        """隐藏 tooltip 浮窗"""
+        tt = getattr(self, "_tooltip", None)
+        if tt:
+            try:
+                tt.destroy()
+            except tk.TclError:
+                pass
+            self._tooltip = None
+
+    # ═══════════ RUN ═══════════
 
     def run(self): self.root.mainloop()
     def quit(self): self._ex()

@@ -84,6 +84,11 @@ def _create_tray_icon(widget: Widget) -> pystray.Icon:
                 widget.toggle_hover_fade,
                 checked=lambda item: widget.get_hover_fade(),
             ),
+            pystray.MenuItem(
+                "Charts Panel",
+                widget.toggle_sidebar,
+                checked=lambda item: widget.get_sidebar_visible(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Exit", lambda: _do_exit(icon, widget)),
         ),
