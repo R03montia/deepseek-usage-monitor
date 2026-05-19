@@ -290,7 +290,7 @@ class Widget:
 
         bonus = float(d.get("bonus_balance", 0) or 0)
         cv.itemconfig("bal_sub",
-                      text=f"Wallet ¥{_2(bal)}  |  Free ¥{_2(bonus)}  |  Used {int(pct*100)}%")
+                      text=f"Wallet ¥{_2(bal)}  |  Free ¥{_2(bonus)}  |  Used {int((1-pct)*100)}%")
 
         # progress bar fill
         pw = int(340 * pct)
@@ -349,7 +349,7 @@ class Widget:
         mt = d.get("monthly_tokens", 0)
         cv.itemconfig("fm",
                       text=f"MONTH  {mt:,} tkns  ¥{_4(d.get('monthly_cost',0))}")
-        cv.itemconfig("fs", text=f"LEFT {100-int(pct*100)}%")
+        cv.itemconfig("fs", text=f"LEFT {int(pct*100)}%")
         cv.itemconfig("fq", text=self._quote)
         cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
 
