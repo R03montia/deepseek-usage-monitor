@@ -1466,10 +1466,10 @@ class Widget:
             self.sidebar_cv.create_rectangle(x, y0 + 22, x + 3, y0 + 23, fill=B2, outline="")
 
         # ── 柱子 & 均线参数 ──
+        # 注：series 中 cost 始终为 CNY，chart_max_cfg 也以 CNY 为单位
+        # 两者单位一致才能正确计算柱高比例，标签显示时才用 _fmt_curr 换算
         actual_max = max(d["cost"] for d in series) or 1
         chart_max_cfg = load_config().get("chart_max_display", {}).get("cost")
-        if chart_max_cfg and chart_max_cfg > 0:
-            chart_max_cfg = self._conv(chart_max_cfg)  # CNY → 当前币种
         max_val = chart_max_cfg if (chart_max_cfg and chart_max_cfg > 0) else actual_max
         n = len(series)
 
