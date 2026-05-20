@@ -29,7 +29,7 @@ def build_heatmap_from_api(api) -> dict:
     """Fetch historical monthly usage from the API and build a flat day→data map.
 
     Iterates the last 12 months and collects per-day total/cache_hit/cache_miss.
-    Returns a dict keyed by ISO date string.
+    Returns a dict keyed by ISO date string. Days without usage are omitted.
     """
     today = date.today()
     heatmap: dict[str, dict] = {}
@@ -47,22 +47,25 @@ def build_heatmap_from_api(api) -> dict:
             ds = day_entry.get("date", "")
             if not ds:
                 continue
-            if ds not in heatmap:
-                heatmap[ds] = {"total": 0, "cache_hit": 0, "cache_miss": 0}
+            total = 0
+            cache_hit = 0
+            cache_miss = 0
             for me in day_entry.get("data", []):
                 for ut in me.get("usage", []):
                     t = ut.get("type", "")
                     a = int(ut.get("amount", "0"))
                     if t == "RESPONSE_TOKEN":
-                        heatmap[ds]["total"] += a
+                        total += a
                     elif t == "PROMPT_CACHE_HIT_TOKEN":
-                        heatmap[ds]["total"] += a
-                        heatmap[ds]["cache_hit"] += a
+                        total += a
+                        cache_hit += a
                     elif t == "PROMPT_CACHE_MISS_TOKEN":
-                        heatmap[ds]["total"] += a
-                        heatmap[ds]["cache_miss"] += a
+                        total += a
+                        cache_miss += a
                     elif t == "PROMPT_TOKEN":
-                        heatmap[ds]["total"] += a
+                        total += a
+            if total > 0:
+                heatmap[ds] = {"total": total, "cache_hit": cache_hit, "cache_miss": cache_miss}
 
     return heatmap
 
@@ -71,9 +74,13 @@ def merge_today(heatmap: dict, daily_series: list[dict]) -> dict:
     """Merge today's data from daily_series into the heatmap cache."""
     for entry in daily_series:
         ds = entry["date"]
-        if ds not in heatmap:
-            heatmap[ds] = {}
-        heatmap[ds]["total"] = entry.get("total", 0)
-        heatmap[ds]["cache_hit"] = entry.get("cache_hit", 0)
-        heatmap[ds]["cache_miss"] = entry.get("cache_miss", 0)
+        total = entry.get("total", 0)
+        if total == 0:
+            heatmap.pop(ds, None)
+            continue
+        heatmap[ds] = {
+            "total": total,
+            "cache_hit": entry.get("cache_hit", 0),
+            "cache_miss": entry.get("cache_miss", 0),
+        }
     return heatmap

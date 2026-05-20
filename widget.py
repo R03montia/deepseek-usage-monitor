@@ -106,7 +106,6 @@ THEMES = {
 W, H = 380, 350
 W_LITE, H_LITE = 310, 230
 SIDEBAR_WIDTH = 200  # 侧边栏宽度
-HEATMAP_EXTRA = 130  # 热力图展开时额外高度
 
 
 # ── Rotating quotes ────────────────────────────────────────────────────────
@@ -268,7 +267,7 @@ class Widget:
         self._currency = get_currency()
         self._rate = 1.0
         self._dragging = False
-        self._sidebar_visible = True
+        self._sidebar_visible = False
         self._animating = False
         self._lite_mode = get_lite_mode()
         self._theme = get_theme()
@@ -289,11 +288,16 @@ class Widget:
         # 主Canvas（左侧信息面板）
         self.cv = tk.Canvas(self.root, width=W, height=H,
                             bg=BG, highlightthickness=0, bd=0)
-        self.cv.pack(side="left", fill="both", expand=False)
 
         # 侧边栏Canvas（图表区域）
         self.sidebar_cv = tk.Canvas(self.root, width=0, height=H,
                                    bg=CARD, highlightthickness=0, bd=0)
+
+        # 热力图独立 Canvas（全宽底部，独立模块风格）
+        self.hm_cv = tk.Canvas(self.root, width=W, height=0,
+                               bg=CARD, highlightthickness=0, bd=0)
+        # hm_cv 不提前 pack，用 pack/pack_forget 按需显示
+        self.cv.pack(side="left", fill="both", expand=False)
         self.sidebar_cv.pack(side="right", fill="both", expand=False)
 
         self._dd: list[str] = []
@@ -322,9 +326,10 @@ class Widget:
         self._heatmap_building = False
         self._pure_heatmap = False
         self._hm_extra = 0  # 当前热力图展开高度（动画用）
+        self._hm_win = None  # 纯热力图独立窗口
 
-        # 拖拽事件：绑定到两个 canvas（root 不绑，避免重复触发）
-        for widget in (self.cv, self.sidebar_cv):
+        # 拖拽事件：绑定到三个 canvas
+        for widget in (self.cv, self.sidebar_cv, self.hm_cv):
             widget.bind("<Button-1>", self._ds)
             widget.bind("<B1-Motion>", self._dm)
             widget.bind("<ButtonRelease-1>", self._de)
@@ -341,12 +346,6 @@ class Widget:
         self._fetch_exchange_rate()
         self._apply_theme(self._theme)
         self._draw_static()
-        if self._sidebar_visible:
-            init_h = H + HEATMAP_EXTRA
-            self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=init_h)
-            self.cv.config(height=init_h)
-            self.root.geometry(f"{W + SIDEBAR_WIDTH}x{init_h}")
-            self._hm_extra = HEATMAP_EXTRA
         self._tick()
         self.root.after(5000, self._startup_fallback)
 
@@ -355,6 +354,15 @@ class Widget:
     @property
     def _currency_symbol(self):
         return {"CNY": "¥", "USD": "$", "CAD": "$", "JPY": "¥"}.get(self._currency, "¥")
+
+    @property
+    def _hm_target(self):
+        """热力图展开高度 — 根据全宽 580px 等比计算 cell，返回所需 hm_cv 高度。"""
+        avail_w = W + SIDEBAR_WIDTH - 20
+        cell = max(4, (avail_w + 1) // 30 - 1)
+        step = cell + 1
+        grid_h = 12 * step - 1
+        return 30 + grid_h + 6 + cell + 6  # ly + grid + gap + legend_cell + bottom
 
     def _conv(self, amount):
         """Convert amount from CNY to current currency."""
@@ -412,6 +420,7 @@ class Widget:
         self.root.configure(bg=BG)
         self.cv.configure(bg=BG)
         self.sidebar_cv.configure(bg=CARD)
+        self.hm_cv.configure(bg=CARD)
 
     def apply_theme(self, name: str):
         """Public: apply theme with crossfade, persist, redraw."""
@@ -440,8 +449,9 @@ class Widget:
             if saved_data:
                 self._data = saved_data
                 self._draw()
-                if self._sidebar_visible and not self._pure_heatmap:
+                if self._sidebar_visible:
                     self._draw_charts()
+                    self._draw_heatmap_section()
             # 后台刷新真实数据
             self.update_data()
             self.root.after(15, _fade_in)
@@ -611,19 +621,7 @@ class Widget:
 
     def _draw_static_lite(self):
         cv = self.cv
-        w, h = (W, H) if self._pure_heatmap else (W_LITE, H_LITE)
-
-        cv.create_rectangle(2, 2, w-2, h-2, outline=B1, width=2)
-        cv.create_rectangle(6, 6, w-6, h-6, outline=B2, width=1)
-
-        if self._pure_heatmap:
-            cv.create_text(12, 16, text="♨ HEATMAP VIEW", font=self.f2, fill=W0, anchor="w")
-            cv.create_oval(w-24, 11, w-14, 21, fill=GREEN, outline="", tags="dot")
-            cv.create_text(w-30, 16, text="", font=self.f3, fill=B1, anchor="e", tags="fcur")
-            for x in range(8, w-8, 8):
-                cv.create_rectangle(x, 28, x+5, 29, fill=B2, outline="")
-            cv.create_text(w//2, h-10, text="", font=self.f3, fill=W2, anchor="center", tags="ft")
-            return
+        w, h = W_LITE, H_LITE
 
         # ── Title ──
         cv.create_text(12, 16, text="TOKENS MONITOR", font=self.f2, fill=W0, anchor="w")
@@ -706,8 +704,12 @@ class Widget:
     def _redraw_heatmap(self):
         """Redraw heatmap area on main thread."""
         if self._sidebar_visible:
-            self._draw()
-            self._draw_charts()
+            self._draw_heatmap_section()
+        if self._hm_win:
+            # 找到 hm_win 上的 canvas（第一个也是唯一一个 widget）
+            children = self._hm_win.winfo_children()
+            if children:
+                self._draw_heatmap_section(children[0])
 
     def _on_fetch_done(self, data):
         self._data = data
@@ -725,6 +727,7 @@ class Widget:
         self._draw()
         if self._sidebar_visible:
             self._draw_charts()
+            self._draw_heatmap_section()
         self._updating = False
         if not self._startup_done:
             self._startup_fade_in()
@@ -737,6 +740,7 @@ class Widget:
         self._draw()
         if self._sidebar_visible:
             self._draw_charts()
+            self._draw_heatmap_section()
         self._updating = False
         if not self._startup_done:
             self._startup_fade_in()
@@ -752,8 +756,7 @@ class Widget:
 
         if err:
             cv.itemconfig("dot", fill=RED)
-            if not self._pure_heatmap:
-                cv.itemconfig("bal_amt", text="ERR", fill=RED)
+            cv.itemconfig("bal_amt", text="ERR", fill=RED)
             cv.itemconfig("ft", text="~ error ~")
             return
 
@@ -845,36 +848,13 @@ class Widget:
         cv.itemconfig("fq", text=self._quote)
         cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
 
-        # ── 热力图（侧边栏展开时在底部扩展区域） ──
-        if self._sidebar_visible:
-            hm_y = H + 8
-            for x in range(12, W - 12, 6):
-                cv.create_rectangle(x, H + 4, x + 4, H + 5, fill=B2, outline="", tags="hm_area")
-            self._draw_heatmap(self.cv, 14, hm_y, W - 28, group_tag="hm_area")
+        # 热力图现在绘制在独立的 hm_cv 上（见 toggle_sidebar → _animate_sidebar → _draw_heatmap_section）
+        # 此处不再绘制热力图
 
     def _draw_lite(self, d):
         cv = self.cv
 
         cv.itemconfig("dot", fill=GREEN if d.get("ok") else YELLOW)
-
-        if self._pure_heatmap:
-            w = W
-            cv.itemconfig("fcur", text="")
-            cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
-            # 热力图居中，动态计算 cell 大小填满空间
-            avail_w = w - 40
-            # 用 avail_w 传给 _draw_heatmap，它会自动算出合适的 cell 大小
-            hm_w_est = avail_w
-            gap = 1
-            # 让 cell 自动适应：30*(c+1)-1 = hm_w_est → c = (hm_w_est+1)/30 - 1
-            c = max(3, (avail_w + gap) // 30 - gap)
-            hm_w_real = 30 * (c + gap) - gap
-            hm_h_real = 12 * (c + gap) - gap
-            cx = (w - hm_w_real) // 2
-            cy = 34
-            cv.delete("hm_pure")
-            self._draw_heatmap(cv, cx, cy, avail_w, show_label=False, group_tag="hm_pure", cell=c)
-            return
 
         w = W_LITE
 
@@ -985,11 +965,14 @@ class Widget:
         else:
             new_x, new_y, new_w, new_h = rx, 0, rw, strip_w
 
-        # Close sidebar before animation begins
+        # Close sidebar + heatmap before animation begins
         if self._sidebar_visible:
             self._sidebar_visible = False
             self.sidebar_cv.delete("all")
             self.sidebar_cv.config(width=0)
+        if self.hm_cv.winfo_height() > 0:
+            self.hm_cv.delete("all")
+            self.hm_cv.pack_forget()
 
         start_x, start_y, start_w, start_h = rx, ry, rw, rh
         dx, dy, dw, dh = new_x - start_x, new_y - start_y, new_w - start_w, new_h - start_h
@@ -1102,9 +1085,13 @@ class Widget:
                 if target.get("sidebar") and not self._lite_mode:
                     self._sidebar_visible = True
                     has_hm = target.get("heatmap", False)
-                    sh = H + (HEATMAP_EXTRA if has_hm else 0)
-                    self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=sh)
-                    self.cv.config(height=sh)
+                    cv_h = H + (self._hm_target if has_hm else 0)
+                    self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+                    self.cv.config(height=H)
+                    if has_hm:
+                        self.hm_cv.pack(side="bottom", fill="x", expand=False, before=self.cv)
+                        self.hm_cv.config(height=self._hm_target)
+                        self._draw_heatmap_section()
                     self._draw_charts()
                 self._draw()
                 # Deferred background refresh (cancelable)
@@ -1149,7 +1136,9 @@ class Widget:
             self._sidebar_visible = False
             self.sidebar_cv.delete("all")
             self.sidebar_cv.config(width=0)
-            self.cv.delete("hm_area")
+        if self.hm_cv.winfo_height() > 0:
+            self.hm_cv.delete("all")
+            self.hm_cv.pack_forget()
 
         start_x, start_y = self.root.winfo_rootx(), self.root.winfo_rooty()
         start_w, start_h = self.root.winfo_width(), self.root.winfo_height()
@@ -1198,9 +1187,12 @@ class Widget:
         self._draw_static()
         if had_sidebar:
             self._sidebar_visible = True
-            sh = H + (HEATMAP_EXTRA if has_hm else 0)
-            self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=sh)
-            self.cv.config(height=sh)
+            self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+            self.cv.config(height=H)
+            if has_hm:
+                self.hm_cv.pack(side="bottom", fill="x", expand=False, before=self.cv)
+                self.hm_cv.config(height=self._hm_target)
+                self._draw_heatmap_section()
             self._draw_charts()
         self.update_data()
 
@@ -1269,7 +1261,7 @@ class Widget:
         self._snap_click_unsnap = False
         self._snap_click_pos = None
 
-    def _pop(self, _):
+    def _pop(self, event):
         # 取消待处理的重吸附定时器（倒计时期间点击右键）
         if self._snap_after_id:
             self.root.after_cancel(self._snap_after_id)
@@ -1281,7 +1273,8 @@ class Widget:
         if self._snapped and not self._peeking:
             self._start_peek()
 
-        m = tk.Menu(self.root, tearoff=0, bg=MENU_BG, fg=MENU_FG,
+        parent = event.widget.winfo_toplevel() if event else self.root
+        m = tk.Menu(parent, tearoff=0, bg=MENU_BG, fg=MENU_FG,
                     activebackground=MENU_ABG, activeforeground=MENU_AFG, font=self.f3)
 
         # 直接执行命令，再关闭菜单（Windows 上 tk_popup 非阻塞，延迟执行不可靠）
@@ -1300,11 +1293,10 @@ class Widget:
         m.add_command(label="🔍 Refresh Now", command=_pick(self.update_data))
         m.add_separator()
         m.add_command(label="📊 Toggle Charts", command=_pick(self.toggle_sidebar))
-        if self._pure_heatmap:
-            m.add_command(label="🔰 Full Mode", command=_pick(self.toggle_pure_heatmap))
-        elif self._lite_mode:
+        hm_label = "✕ Close Heatmap" if self._hm_win else "♨ Heatmap"
+        m.add_command(label=hm_label, command=_pick(self.toggle_pure_heatmap))
+        if self._lite_mode and not self._hm_win:
             m.add_command(label="🔰 Full Mode", command=_pick(self.toggle_lite_mode))
-            m.add_command(label="♨ Pure Heatmap", command=_pick(self.toggle_pure_heatmap))
         else:
             m.add_command(label="🔰 Lite Mode", command=_pick(self.toggle_lite_mode))
         m.add_separator()
@@ -1343,6 +1335,10 @@ class Widget:
         m.grab_release()
 
     def _ex(self):
+        if self._hm_win:
+            try: self._hm_win.destroy()
+            except tk.TclError: pass
+            self._hm_win = None
         self.root.quit()
         self.root.destroy()
 
@@ -1353,8 +1349,13 @@ class Widget:
         target_alpha = float(self.root.attributes("-alpha"))
 
         def _apply():
-            if self._pure_heatmap:
+            # 切换时关闭热力图独立窗口
+            if self._hm_win:
+                try: self._hm_win.destroy()
+                except tk.TclError: pass
+                self._hm_win = None
                 self._pure_heatmap = False
+                self.root.deiconify()
             self._lite_mode = not self._lite_mode
             try:
                 cfg = load_config()
@@ -1362,9 +1363,11 @@ class Widget:
                 save_config(cfg)
             except Exception:
                 pass
-            if self._lite_mode and self._sidebar_visible:
+            if self._lite_mode:
                 self._sidebar_visible = False
                 self.sidebar_cv.delete("all")
+                self.hm_cv.delete("all")
+                self.hm_cv.pack_forget()
             self.cv.delete("all")
             self._dd.clear()
             self._draw_static()
@@ -1391,29 +1394,59 @@ class Widget:
         _fade_out()
 
     def toggle_pure_heatmap(self):
-        """切换纯热力图模式（LiteMode 下仅展示时间 + 全尺寸热力图）。"""
-        if self._pure_heatmap:
+        """打开/关闭纯热力图独立窗口。"""
+        if self._hm_win is not None:
+            try: self._hm_win.destroy()
+            except tk.TclError: pass
+            self._hm_win = None
             self._pure_heatmap = False
-            self._lite_mode = False
-        else:
-            self._lite_mode = True
-            self._pure_heatmap = True
-            if self._sidebar_visible:
-                self._sidebar_visible = False
-                self.sidebar_cv.delete("all")
-        try:
-            cfg = load_config()
-            cfg["lite_mode"] = self._lite_mode
-            save_config(cfg)
-        except Exception:
-            pass
-        self.cv.delete("all")
-        self._dd.clear()
-        self._draw_static()
-        w, h = (W, H)  # 纯热力图使用完整尺寸
-        self.cv.config(height=h)
-        self.root.geometry(f"{w}x{h}")
-        self.update_data()
+            self.root.deiconify()
+            return
+
+        self._pure_heatmap = True
+        win = tk.Toplevel(self.root)
+        win.title("DeepSeek Heatmap")
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=CARD)
+
+        # 缩小 50%
+        w = 280
+        avail = w - 20
+        cell = max(4, (avail + 1) // 30 - 1)
+        step = cell + 1
+        grid_h = 12 * step - 1
+        h = 30 + grid_h + 6 + cell + 6  # ly + grid + gap + legend_cell + bottom
+
+        cv = tk.Canvas(win, width=w, height=h, bg=CARD,
+                       highlightthickness=0, bd=0)
+        cv.pack()
+
+        # 先设置窗口大小再绘制，确保布局正确
+        sw = win.winfo_screenwidth(); sh = win.winfo_screenheight()
+        win.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        win.update_idletasks()
+
+        # 绘制热力图
+        self._draw_heatmap_section(cv)
+
+        # 隐藏主窗口
+        self.root.withdraw()
+
+        # 拖拽支持 + 完整右键菜单
+        _dx, _dy = 0, 0
+        def _ds(e):
+            nonlocal _dx, _dy
+            _dx = e.x_root - win.winfo_x()
+            _dy = e.y_root - win.winfo_y()
+        def _dm(e):
+            win.geometry(f"+{e.x_root - _dx}+{e.y_root - _dy}")
+        cv.bind("<Button-1>", _ds)
+        cv.bind("<B1-Motion>", _dm)
+        cv.bind("<Button-3>", self._pop)
+        win.bind("<Button-3>", self._pop)
+
+        self._hm_win = win
 
     def toggle_sidebar(self):
         """切换侧边栏显示/隐藏，带动画（向右 + 向下展开热力图）"""
@@ -1427,40 +1460,44 @@ class Widget:
         self._animate_sidebar()
 
     def _animate_sidebar(self):
-        """Ease-out 动画：宽度向右展开 + 高度向下展开容纳热力图"""
+        """Ease-out 动画：宽度向右展开 + hm_cv 高度向下展开容纳热力图"""
         self._animating = True
         show = self._sidebar_visible
         target_w = SIDEBAR_WIDTH if show else 0
-        hm = HEATMAP_EXTRA if show else 0
+        hm_target = self._hm_target if show else 0
         start_w = self.root.winfo_width()
         start_h = self.root.winfo_height()
+        start_hm = self.hm_cv.winfo_height()  # 关闭动画的起始高度
         end_w = W + target_w
-        end_h = H + hm
+        end_h = H + hm_target
         steps = 10
+
+        if show:
+            self.hm_cv.pack(side="bottom", fill="x", expand=False, before=self.cv)
 
         def step(i=0):
             p = 1 - (1 - (i + 1) / steps) ** 2
             cur_w = int(target_w * p) if show else int(SIDEBAR_WIDTH * (1 - p))
-            cur_hm = int(hm * p) if show else int(HEATMAP_EXTRA * (1 - p))
+            cur_hm = int(hm_target * p) if show else int(start_hm * (1 - p))
             cur_root_w = int(start_w + (end_w - start_w) * p)
             cur_root_h = int(start_h + (end_h - start_h) * p)
-            new_cv_h = H + cur_hm
-            self.cv.config(height=new_cv_h)
-            self.sidebar_cv.config(width=cur_w, height=new_cv_h)
+            self.cv.config(height=H)
+            self.sidebar_cv.config(width=cur_w)
+            self.hm_cv.config(height=cur_hm)
             self.root.geometry(f"{cur_root_w}x{cur_root_h}")
             if i + 1 < steps:
                 self.root.after(16, lambda: step(i + 1))
             else:
-                final_h = H + hm
-                self.cv.config(height=final_h)
-                self.sidebar_cv.config(width=target_w, height=final_h)
-                self.root.geometry(f"{end_w}x{final_h}")
+                self.cv.config(height=H)
+                self.sidebar_cv.config(width=target_w)
+                self.hm_cv.config(height=hm_target)
+                self.root.geometry(f"{end_w}x{end_h}")
                 if not show:
                     self.sidebar_cv.delete("all")
-                    self.cv.delete("hm_area")
-                    self.cv.config(height=H)
-                    self.sidebar_cv.config(height=H)
+                    self.hm_cv.pack_forget()
                 self._animating = False
+                if show:
+                    self._draw_heatmap_section()
 
         step()
 
@@ -1473,7 +1510,7 @@ class Widget:
             return
 
         w = SIDEBAR_WIDTH
-        sb_h = H + (HEATMAP_EXTRA if self._sidebar_visible else 0)
+        sb_h = H
         series = d.get("daily_series", [])
         if not series:
             self.sidebar_cv.create_text(w // 2, sb_h // 2,
@@ -1663,6 +1700,40 @@ class Widget:
 
     # ═══════════ HEATMAP ═══════════
 
+    def _draw_heatmap_section(self, cv=None):
+        """在指定 canvas 上绘制独立风格热力图模块。默认 hm_cv，全宽横跨主面板+侧边栏。"""
+        if cv is None:
+            cv = self.hm_cv
+        cv.update_idletasks()
+        cv.delete("all")
+        hm_h = int(cv.cget("height"))
+        if hm_h < 10:
+            return
+        hm_w = cv.winfo_width()
+        if hm_w < 10:
+            hm_w = int(cv.cget("width"))
+        if hm_w < 10:
+            hm_w = W + SIDEBAR_WIDTH
+
+        # ── 卡片边框 ──
+        cv.create_rectangle(2, 2, hm_w - 2, hm_h - 2, outline=B1, width=2)
+        cv.create_rectangle(6, 6, hm_w - 6, hm_h - 6, outline=B2, width=1)
+
+        # ── 标题栏 ──
+        cv.create_text(14, 12, text="◆ HEATMAP", font=self.f2, fill=GREEN, anchor="w")
+        cv.create_text(hm_w - 14, 12, text="(token × day)", font=self.f3, fill=B2, anchor="e")
+        for x in range(10, hm_w - 10, 6):
+            cv.create_rectangle(x, 23, x + 3, 24, fill=B2, outline="")
+
+        # ── 计算 cell：填满宽度，高度自适应 ──
+        pad = 10
+        avail_w = hm_w - pad * 2
+        cell = max(4, (avail_w + 1) // 30 - 1)
+        total_w = 30 * (cell + 1) - 1
+        x0 = (hm_w - total_w) // 2
+
+        self._draw_heatmap(cv, x0, 28, avail_w, show_label=False, group_tag="hm_section", cell=cell)
+
     def _draw_heatmap(self, cv, x0, y0, w, show_label=True, group_tag=None, cell=None):
         """GitHub 风格热力图，30×12 格，最新一日右下角。
 
@@ -1673,7 +1744,7 @@ class Widget:
         gap = 1
         cols, rows = 30, 12
         if cell is None:
-            cell = max(3, min((w + gap) // cols - gap, 7))
+            cell = max(3, (w + gap) // cols - gap)
         step = cell + gap
         hm_w = cols * step - gap
         hm_h = rows * step - gap
@@ -1761,11 +1832,11 @@ class Widget:
             (0, "no data"), (eff_max * 0.25, "low"),
             (eff_max * 0.50, "mid"), (eff_max * 0.75, "high"),
         ]):
-            lx_i = lx + i * (cell + gap + 26)
+            lx_i = lx + i * (cell + gap + 28)
             cv.create_rectangle(lx_i, ly2, lx_i + cell, ly2 + cell,
                                 fill=_heat_color(th), outline="", tags=group_tag)
-            cv.create_text(lx_i + cell + 3, ly2 + cell // 2, text=lbl,
-                           font=("Courier New", 5), fill=B2, anchor="w", tags=group_tag)
+            cv.create_text(lx_i + cell + 4, ly2 + cell // 2, text=lbl,
+                           font=("Courier New", 7), fill=W2, anchor="w", tags=group_tag)
 
     def _show_heatmap_tooltip(self, event, date_str, total, cache_hit, cache_miss):
         """Tooltip for heatmap cells."""
