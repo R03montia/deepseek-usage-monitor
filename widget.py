@@ -2,13 +2,14 @@
 
 import tkinter as tk
 from tkinter import font as tkfont
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 from itertools import cycle
 import threading
 
 from api import DeepSeekPlatform
 from config import get_refresh_interval, get_pin_window, get_currency, get_lite_mode, get_theme, get_auto_snap, load_config, save_config
+from heatmap import load_heatmap, save_heatmap, build_heatmap_from_api, merge_today
 
 # ── Colors ─────────────────────────────────────────────────────────────────
 # Module-level color names — updated by apply_theme() at runtime.
@@ -105,6 +106,7 @@ THEMES = {
 W, H = 380, 350
 W_LITE, H_LITE = 310, 230
 SIDEBAR_WIDTH = 200  # 侧边栏宽度
+HEATMAP_EXTRA = 130  # 热力图展开时额外高度
 
 
 # ── Rotating quotes ────────────────────────────────────────────────────────
@@ -243,6 +245,16 @@ def _fmt_num(v):
     except: return "--"
 
 
+def _blend_hex(c1: str, c2: str, ratio: float) -> str:
+    """Blend two hex colors. ratio=0 → c1, ratio=1 → c2."""
+    r1 = int(c1[1:3], 16); g1 = int(c1[3:5], 16); b1 = int(c1[5:7], 16)
+    r2 = int(c2[1:3], 16); g2 = int(c2[3:5], 16); b2 = int(c2[5:7], 16)
+    r = min(255, int(r1 + (r2 - r1) * ratio))
+    g = min(255, int(g1 + (g2 - g1) * ratio))
+    b = min(255, int(b1 + (b2 - b1) * ratio))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 class Widget:
     def __init__(self, token: str):
         self.api = DeepSeekPlatform(token)
@@ -306,6 +318,10 @@ class Widget:
         self._last_bar_index = -1      # 当前悬停的柱子索引
         self._menu_closed = False      # 右键菜单关闭后短暂阻止吸附
         self._startup_done = False     # 首次数据加载后淡入
+        self._heatmap_data = load_heatmap()
+        self._heatmap_building = False
+        self._pure_heatmap = False
+        self._hm_extra = 0  # 当前热力图展开高度（动画用）
 
         # 拖拽事件：绑定到两个 canvas（root 不绑，避免重复触发）
         for widget in (self.cv, self.sidebar_cv):
@@ -326,9 +342,11 @@ class Widget:
         self._apply_theme(self._theme)
         self._draw_static()
         if self._sidebar_visible:
-            self.sidebar_cv.config(width=SIDEBAR_WIDTH)
-            self.root.geometry(f"{W + SIDEBAR_WIDTH}x{H}")
-            # 暂不绘制图表——数据到达后再画，配合淡入
+            init_h = H + HEATMAP_EXTRA
+            self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=init_h)
+            self.cv.config(height=init_h)
+            self.root.geometry(f"{W + SIDEBAR_WIDTH}x{init_h}")
+            self._hm_extra = HEATMAP_EXTRA
         self._tick()
         self.root.after(5000, self._startup_fallback)
 
@@ -422,7 +440,7 @@ class Widget:
             if saved_data:
                 self._data = saved_data
                 self._draw()
-                if self._sidebar_visible:
+                if self._sidebar_visible and not self._pure_heatmap:
                     self._draw_charts()
             # 后台刷新真实数据
             self.update_data()
@@ -593,11 +611,19 @@ class Widget:
 
     def _draw_static_lite(self):
         cv = self.cv
-        w, h = W_LITE, H_LITE
+        w, h = (W, H) if self._pure_heatmap else (W_LITE, H_LITE)
 
-        # Outer pixel borders
         cv.create_rectangle(2, 2, w-2, h-2, outline=B1, width=2)
         cv.create_rectangle(6, 6, w-6, h-6, outline=B2, width=1)
+
+        if self._pure_heatmap:
+            cv.create_text(12, 16, text="♨ HEATMAP VIEW", font=self.f2, fill=W0, anchor="w")
+            cv.create_oval(w-24, 11, w-14, 21, fill=GREEN, outline="", tags="dot")
+            cv.create_text(w-30, 16, text="", font=self.f3, fill=B1, anchor="e", tags="fcur")
+            for x in range(8, w-8, 8):
+                cv.create_rectangle(x, 28, x+5, 29, fill=B2, outline="")
+            cv.create_text(w//2, h-10, text="", font=self.f3, fill=W2, anchor="center", tags="ft")
+            return
 
         # ── Title ──
         cv.create_text(12, 16, text="TOKENS MONITOR", font=self.f2, fill=W0, anchor="w")
@@ -664,9 +690,38 @@ class Widget:
         except Exception as exc:
             self.root.after(0, self._on_fetch_error, str(exc))
 
+    def _build_heatmap_worker(self):
+        """Background: fetch historical months and build heatmap cache."""
+        try:
+            hm = build_heatmap_from_api(self.api)
+            if hm:
+                self._heatmap_data = hm
+                save_heatmap(hm)
+                self.root.after(0, self._redraw_heatmap)
+        except Exception:
+            pass
+        finally:
+            self._heatmap_building = False
+
+    def _redraw_heatmap(self):
+        """Redraw heatmap area on main thread."""
+        if self._sidebar_visible:
+            self._draw()
+            self._draw_charts()
+
     def _on_fetch_done(self, data):
         self._data = data
         self._quote = next(QUOTES)
+
+        # 热力图：合并今天的实时数据到缓存
+        series = data.get("daily_series", [])
+        if series:
+            self._heatmap_data = merge_today(self._heatmap_data, series)
+            save_heatmap(self._heatmap_data)
+        if not self._heatmap_data and not self._heatmap_building:
+            self._heatmap_building = True
+            threading.Thread(target=self._build_heatmap_worker, daemon=True).start()
+
         self._draw()
         if self._sidebar_visible:
             self._draw_charts()
@@ -697,7 +752,8 @@ class Widget:
 
         if err:
             cv.itemconfig("dot", fill=RED)
-            cv.itemconfig("bal_amt", text="ERR", fill=RED)
+            if not self._pure_heatmap:
+                cv.itemconfig("bal_amt", text="ERR", fill=RED)
             cv.itemconfig("ft", text="~ error ~")
             return
 
@@ -789,8 +845,37 @@ class Widget:
         cv.itemconfig("fq", text=self._quote)
         cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
 
+        # ── 热力图（侧边栏展开时在底部扩展区域） ──
+        if self._sidebar_visible:
+            hm_y = H + 8
+            for x in range(12, W - 12, 6):
+                cv.create_rectangle(x, H + 4, x + 4, H + 5, fill=B2, outline="", tags="hm_area")
+            self._draw_heatmap(self.cv, 14, hm_y, W - 28, group_tag="hm_area")
+
     def _draw_lite(self, d):
         cv = self.cv
+
+        cv.itemconfig("dot", fill=GREEN if d.get("ok") else YELLOW)
+
+        if self._pure_heatmap:
+            w = W
+            cv.itemconfig("fcur", text="")
+            cv.itemconfig("ft", text=f"~ {datetime.now().strftime('%H:%M:%S')} ~")
+            # 热力图居中，动态计算 cell 大小填满空间
+            avail_w = w - 40
+            # 用 avail_w 传给 _draw_heatmap，它会自动算出合适的 cell 大小
+            hm_w_est = avail_w
+            gap = 1
+            # 让 cell 自动适应：30*(c+1)-1 = hm_w_est → c = (hm_w_est+1)/30 - 1
+            c = max(3, (avail_w + gap) // 30 - gap)
+            hm_w_real = 30 * (c + gap) - gap
+            hm_h_real = 12 * (c + gap) - gap
+            cx = (w - hm_w_real) // 2
+            cy = 34
+            cv.delete("hm_pure")
+            self._draw_heatmap(cv, cx, cy, avail_w, show_label=False, group_tag="hm_pure", cell=c)
+            return
+
         w = W_LITE
 
         # ── Balance card ──
@@ -886,7 +971,9 @@ class Widget:
         # 夹紧 restore 位置到屏幕内，保证展开时窗口完全可见
         restore_x = max(0, min(rx, sw - rw))
         restore_y = max(0, min(ry, sh - rh))
-        self._snap_restore = dict(x=restore_x, y=restore_y, w=rw, h=rh, sidebar=self._sidebar_visible)
+        has_heatmap = self._sidebar_visible
+        self._snap_restore = dict(x=restore_x, y=restore_y, w=rw, h=rh, sidebar=self._sidebar_visible,
+                                  heatmap=has_heatmap)
 
         strip_w = self.SNAP_STRIP
         if edge == "left":
@@ -1014,7 +1101,10 @@ class Widget:
                 self._draw_static()
                 if target.get("sidebar") and not self._lite_mode:
                     self._sidebar_visible = True
-                    self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+                    has_hm = target.get("heatmap", False)
+                    sh = H + (HEATMAP_EXTRA if has_hm else 0)
+                    self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=sh)
+                    self.cv.config(height=sh)
                     self._draw_charts()
                 self._draw()
                 # Deferred background refresh (cancelable)
@@ -1052,12 +1142,14 @@ class Widget:
         else:
             new_x, new_y, new_w, new_h = rx, 0, rw, strip_w
 
-        # Save sidebar state, close before animation
+        # Save sidebar+heatmap state, close before animation
         self._snap_restore["sidebar"] = self._sidebar_visible
+        self._snap_restore["heatmap"] = self._sidebar_visible
         if self._sidebar_visible:
             self._sidebar_visible = False
             self.sidebar_cv.delete("all")
             self.sidebar_cv.config(width=0)
+            self.cv.delete("hm_area")
 
         start_x, start_y = self.root.winfo_rootx(), self.root.winfo_rooty()
         start_w, start_h = self.root.winfo_width(), self.root.winfo_height()
@@ -1091,12 +1183,14 @@ class Widget:
 
         restore = self._snap_restore
         had_sidebar = restore.get("sidebar", False)
+        has_hm = restore.get("heatmap", False)
         self._snapped = False
         self._peeking = False
         self._snap_edge = None
         self._snap_restore = {}
 
-        self.root.geometry(f"{restore['w']}x{restore['h']}+{restore['x']}+{restore['y']}")
+        total_h = restore["h"] if restore else H
+        self.root.geometry(f"{restore['w']}x{total_h}+{restore['x']}+{restore['y']}")
 
         self._clear_snap_indicator()
         self.cv.delete("all")
@@ -1104,7 +1198,9 @@ class Widget:
         self._draw_static()
         if had_sidebar:
             self._sidebar_visible = True
-            self.sidebar_cv.config(width=SIDEBAR_WIDTH)
+            sh = H + (HEATMAP_EXTRA if has_hm else 0)
+            self.sidebar_cv.config(width=SIDEBAR_WIDTH, height=sh)
+            self.cv.config(height=sh)
             self._draw_charts()
         self.update_data()
 
@@ -1204,8 +1300,13 @@ class Widget:
         m.add_command(label="🔍 Refresh Now", command=_pick(self.update_data))
         m.add_separator()
         m.add_command(label="📊 Toggle Charts", command=_pick(self.toggle_sidebar))
-        lite_label = "🔰 Lite Mode" if not self._lite_mode else "🔰 Full Mode"
-        m.add_command(label=lite_label, command=_pick(self.toggle_lite_mode))
+        if self._pure_heatmap:
+            m.add_command(label="🔰 Full Mode", command=_pick(self.toggle_pure_heatmap))
+        elif self._lite_mode:
+            m.add_command(label="🔰 Full Mode", command=_pick(self.toggle_lite_mode))
+            m.add_command(label="♨ Pure Heatmap", command=_pick(self.toggle_pure_heatmap))
+        else:
+            m.add_command(label="🔰 Lite Mode", command=_pick(self.toggle_lite_mode))
         m.add_separator()
 
         pin_label = "📌 Unpin Window" if self._pin_window else "📌 Pin Window"
@@ -1252,6 +1353,8 @@ class Widget:
         target_alpha = float(self.root.attributes("-alpha"))
 
         def _apply():
+            if self._pure_heatmap:
+                self._pure_heatmap = False
             self._lite_mode = not self._lite_mode
             try:
                 cfg = load_config()
@@ -1266,6 +1369,7 @@ class Widget:
             self._dd.clear()
             self._draw_static()
             w, h = (W_LITE, H_LITE) if self._lite_mode else (W, H)
+            self.cv.config(height=h)
             self.root.geometry(f"{w}x{h}")
             self.update_data()
             self.root.after(15, _fade_in)
@@ -1286,61 +1390,99 @@ class Widget:
 
         _fade_out()
 
+    def toggle_pure_heatmap(self):
+        """切换纯热力图模式（LiteMode 下仅展示时间 + 全尺寸热力图）。"""
+        if self._pure_heatmap:
+            self._pure_heatmap = False
+            self._lite_mode = False
+        else:
+            self._lite_mode = True
+            self._pure_heatmap = True
+            if self._sidebar_visible:
+                self._sidebar_visible = False
+                self.sidebar_cv.delete("all")
+        try:
+            cfg = load_config()
+            cfg["lite_mode"] = self._lite_mode
+            save_config(cfg)
+        except Exception:
+            pass
+        self.cv.delete("all")
+        self._dd.clear()
+        self._draw_static()
+        w, h = (W, H)  # 纯热力图使用完整尺寸
+        self.cv.config(height=h)
+        self.root.geometry(f"{w}x{h}")
+        self.update_data()
+
     def toggle_sidebar(self):
-        """切换侧边栏显示/隐藏，带动画"""
+        """切换侧边栏显示/隐藏，带动画（向右 + 向下展开热力图）"""
         if self._animating or self._lite_mode:
             return
         self._hide_bar_tooltip()
         self._sidebar_visible = not self._sidebar_visible
-        # 展开前先画出图表，动画过程中内容立即可见
         if self._sidebar_visible:
+            # 先画图表再动画
             self._draw_charts()
         self._animate_sidebar()
 
     def _animate_sidebar(self):
-        """Ease-out 动画：同步缩放侧边栏 Canvas 和根窗口宽度"""
+        """Ease-out 动画：宽度向右展开 + 高度向下展开容纳热力图"""
         self._animating = True
-        target_w = SIDEBAR_WIDTH if self._sidebar_visible else 0
-        start_root_w = self.root.winfo_width()
-        end_root_w = W + target_w
+        show = self._sidebar_visible
+        target_w = SIDEBAR_WIDTH if show else 0
+        hm = HEATMAP_EXTRA if show else 0
+        start_w = self.root.winfo_width()
+        start_h = self.root.winfo_height()
+        end_w = W + target_w
+        end_h = H + hm
         steps = 10
 
         def step(i=0):
-            # ease-out quad: 先快后慢
             p = 1 - (1 - (i + 1) / steps) ** 2
-            cur_w = int(target_w * p) if target_w > 0 else int(SIDEBAR_WIDTH * (1 - p))
-            cur_root = int(start_root_w + (end_root_w - start_root_w) * p)
-            self.sidebar_cv.config(width=cur_w)
-            self.root.geometry(f"{cur_root}x{H}")
+            cur_w = int(target_w * p) if show else int(SIDEBAR_WIDTH * (1 - p))
+            cur_hm = int(hm * p) if show else int(HEATMAP_EXTRA * (1 - p))
+            cur_root_w = int(start_w + (end_w - start_w) * p)
+            cur_root_h = int(start_h + (end_h - start_h) * p)
+            new_cv_h = H + cur_hm
+            self.cv.config(height=new_cv_h)
+            self.sidebar_cv.config(width=cur_w, height=new_cv_h)
+            self.root.geometry(f"{cur_root_w}x{cur_root_h}")
             if i + 1 < steps:
                 self.root.after(16, lambda: step(i + 1))
             else:
-                self.sidebar_cv.config(width=target_w)
-                self.root.geometry(f"{end_root_w}x{H}")
-                if not self._sidebar_visible:
+                final_h = H + hm
+                self.cv.config(height=final_h)
+                self.sidebar_cv.config(width=target_w, height=final_h)
+                self.root.geometry(f"{end_w}x{final_h}")
+                if not show:
                     self.sidebar_cv.delete("all")
+                    self.cv.delete("hm_area")
+                    self.cv.config(height=H)
+                    self.sidebar_cv.config(height=H)
                 self._animating = False
 
         step()
 
     def _draw_charts(self):
         """绘制侧边栏：月度趋势图，赛博像素风格"""
-        self._hide_bar_tooltip()  # 重绘前清理残留 tooltip
+        self._hide_bar_tooltip()
         self.sidebar_cv.delete("all")
         d = self._data
         if not d:
             return
 
         w = SIDEBAR_WIDTH
+        sb_h = H + (HEATMAP_EXTRA if self._sidebar_visible else 0)
         series = d.get("daily_series", [])
         if not series:
-            self.sidebar_cv.create_text(w // 2, H // 2,
+            self.sidebar_cv.create_text(w // 2, sb_h // 2,
                                         text="No data yet", font=self.f3, fill=B1, anchor="center")
             return
 
-        # 外侧像素边框（与主窗口一致）
-        self.sidebar_cv.create_rectangle(2, 2, w - 2, H - 2, outline=B1, width=2)
-        self.sidebar_cv.create_rectangle(6, 6, w - 6, H - 6, outline=B2, width=1)
+        # 边框使用实际侧边栏高度
+        self.sidebar_cv.create_rectangle(2, 2, w - 2, sb_h - 2, outline=B1, width=2)
+        self.sidebar_cv.create_rectangle(6, 6, w - 6, sb_h - 6, outline=B2, width=1)
 
         # ── 顶栏标题 ──
         self.sidebar_cv.create_text(w // 2, 16, text="◈ MONTHLY TRENDS ◈",
@@ -1518,6 +1660,140 @@ class Widget:
             if day_num and (i == 0 or i == n_days - 1 or int(day_num) % lbl_int == 0 or is_today):
                 self.sidebar_cv.create_text(x + bar_w / 2, by + bh + 4, text=day_num,
                                             font=("Courier New", 7), fill=W2 if is_today else B1, anchor="n")
+
+    # ═══════════ HEATMAP ═══════════
+
+    def _draw_heatmap(self, cv, x0, y0, w, show_label=True, group_tag=None, cell=None):
+        """GitHub 风格热力图，30×12 格，最新一日右下角。
+
+        Args:
+            cell: 格子像素大小，默认 5（自动根据 w 计算）
+        """
+        today = date.today()
+        gap = 1
+        cols, rows = 30, 12
+        if cell is None:
+            cell = max(3, min((w + gap) // cols - gap, 7))
+        step = cell + gap
+        hm_w = cols * step - gap
+        hm_h = rows * step - gap
+        data = self._heatmap_data or {}
+        heatmap_max_cfg = load_config().get("heatmap_max", 0)
+
+        if group_tag:
+            cv.delete(group_tag)
+
+        # ── Label ──
+        ly = y0
+        if show_label:
+            cv.create_text(x0, ly, text="HEATMAP", font=self.f3, fill=W2, anchor="w", tags=group_tag)
+            cv.create_text(x0 + 65, ly, text="(token × day)", font=self.f3, fill=B2, anchor="w", tags=group_tag)
+            ly += 18
+        else:
+            ly += 2
+
+        # ── Cell data ──
+        cell_info = []
+        max_val = 0
+        for col in range(cols):
+            for row in range(rows):
+                offset = (cols - 1 - col) * rows + (rows - 1 - row)
+                d = today - timedelta(days=offset)
+                ds = d.isoformat()
+                entry = data.get(ds, {})
+                total = entry.get("total", 0)
+                if total > max_val:
+                    max_val = total
+                cell_info.append((col, row, ds, total,
+                                  entry.get("cache_hit", 0), entry.get("cache_miss", 0)))
+
+        # ── Month labels ──
+        prev_month = None
+        for col in range(cols):
+            offset = (cols - 1 - col) * rows + (rows - 1)
+            d = today - timedelta(days=offset)
+            m = d.strftime("%b")
+            if m != prev_month:
+                prev_month = m
+                cv.create_text(x0 + col * step + cell // 2, ly - 1, text=m,
+                               font=("Courier New", 6), fill=B1, anchor="n", tags=group_tag)
+
+        # ── Week labels ──
+        for row in (0, 3, 6, 9):
+            d = today - timedelta(days=rows - 1 - row)
+            cv.create_text(x0 - 8, ly + row * step + cell // 2, text=d.strftime("%a")[0],
+                           font=("Courier New", 5), fill=B2, anchor="e", tags=group_tag)
+
+        # ── Background ──
+        cv.create_rectangle(x0 - 1, ly - 1, x0 + hm_w + 1, ly + hm_h + 1,
+                            fill=_blend_hex(BG, CARD, 0.5), outline=BC, width=1, tags=group_tag)
+
+        # ── Color scale ──
+        eff_max = heatmap_max_cfg if heatmap_max_cfg > 0 else max_val
+
+        def _heat_color(val):
+            if val <= 0 or eff_max <= 0:
+                return _blend_hex(BG, GREEN, 0.04)
+            r = val / eff_max
+            if r <= 0.25:
+                return _blend_hex(BG, GREEN, 0.12)
+            elif r <= 0.50:
+                return _blend_hex(BG, GREEN, 0.30)
+            elif r <= 0.75:
+                return _blend_hex(BG, GREEN, 0.55)
+            return _blend_hex(BG, GREEN, 0.85)
+
+        # ── Draw cells ──
+        for col, row, ds, total, ch, cm in cell_info:
+            x = x0 + col * step
+            y = ly + row * step
+            tag = f"hm_{col}_{row}"
+            cv.create_rectangle(x, y, x + cell, y + cell, fill=_heat_color(total),
+                                outline="", tags=(tag, group_tag) if group_tag else tag)
+            cv.tag_bind(tag, "<Enter>",
+                lambda e, ds_=ds, t_=total, ch_=ch, cm_=cm: self._show_heatmap_tooltip(e, ds_, t_, ch_, cm_))
+            cv.tag_bind(tag, "<Motion>", lambda e: self._move_bar_tooltip(e))
+            cv.tag_bind(tag, "<Leave>", lambda e: self._schedule_hide_tooltip())
+
+        # ── Legend ──
+        lx, ly2 = x0, ly + hm_h + 6
+        for i, (th, lbl) in enumerate([
+            (0, "no data"), (eff_max * 0.25, "low"),
+            (eff_max * 0.50, "mid"), (eff_max * 0.75, "high"),
+        ]):
+            lx_i = lx + i * (cell + gap + 26)
+            cv.create_rectangle(lx_i, ly2, lx_i + cell, ly2 + cell,
+                                fill=_heat_color(th), outline="", tags=group_tag)
+            cv.create_text(lx_i + cell + 3, ly2 + cell // 2, text=lbl,
+                           font=("Courier New", 5), fill=B2, anchor="w", tags=group_tag)
+
+    def _show_heatmap_tooltip(self, event, date_str, total, cache_hit, cache_miss):
+        """Tooltip for heatmap cells."""
+        if self._tooltip_after_id:
+            self.root.after_cancel(self._tooltip_after_id)
+            self._tooltip_after_id = None
+        if self._tooltip_fade_id:
+            self.root.after_cancel(self._tooltip_fade_id)
+            self._tooltip_fade_id = None
+        self._hide_bar_tooltip()
+        is_today = date_str == date.today().isoformat()
+        tt = tk.Toplevel(self.root)
+        tt.overrideredirect(True)
+        tt.attributes("-topmost", True)
+        tt.configure(bg=GREEN if is_today else BLUE)
+        tk.Frame(tt, bg=GREEN if is_today else BLUE, height=2).pack(fill="x")
+        lines = [f"  {'★' if is_today else '●'} {date_str}  ", f"  {'─' * 14}  ",
+                 f"  Tokens    {total:>8,}"]
+        if cache_hit or cache_miss:
+            tc = cache_hit + cache_miss
+            pct = (cache_hit / tc * 100) if tc else 0
+            lines.append(f"  Cache Hit {cache_hit:>7,} ({pct:.0f}%)")
+        text = "\n".join(lines)
+        tk.Label(tt, text=text, bg=CARD, fg=W0, font=self.f3, padx=5, pady=4).pack(padx=1, pady=(0, 1))
+        tt.geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+        tt.attributes("-alpha", 0.0)
+        self._tooltip = tt
+        self._fade_tooltip(0.0, 1.0, 4, 15)
 
     # ═══════════ BAR TOOLTIP ═══════════
 
