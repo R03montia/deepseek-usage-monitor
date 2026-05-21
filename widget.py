@@ -347,8 +347,8 @@ class Widget:
         """热力图展开高度 — 指定 sidebar 是否打开。"""
         hm_w = W + (SIDEBAR_WIDTH if sidebar_open else 0)
         avail_w = hm_w - 20
-        cell = max(4, (avail_w + 1) // 30 - 1)
-        step = cell + 1
+        cell = max(3, (avail_w + 2) // 30 - 2)
+        step = cell + 2
         grid_h = 12 * step - 1
         return 30 + grid_h + 6 + cell + 6  # ly + grid + gap + legend_cell + bottom
 
@@ -910,8 +910,8 @@ class Widget:
         hm_h = self._compact_hm_height(W_LITE)
         y0 = 22  # 卡片标题下方
         avail_w = W_LITE - 20
-        cell = max(4, (avail_w + 1) // 30 - 1)
-        total_w = 30 * (cell + 1) - 1
+        cell = max(3, (avail_w + 2) // 30 - 2)
+        total_w = 30 * (cell + 2) - 2
         x0 = (W_LITE - total_w) // 2
         self._draw_heatmap(cv, x0, y0, avail_w, show_label=False, group_tag="lhm", cell=cell)
 
@@ -1610,8 +1610,8 @@ class Widget:
     def _compact_hm_height(self, width):
         """计算紧凑热力图高度。"""
         avail = width - 20
-        cell = max(4, (avail + 1) // 30 - 1)
-        step = cell + 1
+        cell = max(3, (avail + 2) // 30 - 2)
+        step = cell + 2
         grid_h = 12 * step - 1
         return 30 + grid_h + 6 + cell + 6
 
@@ -1868,11 +1868,28 @@ class Widget:
         # ── 计算 cell：填满宽度，高度自适应 ──
         pad = 10
         avail_w = hm_w - pad * 2
-        cell = max(4, (avail_w + 1) // 30 - 1)
-        total_w = 30 * (cell + 1) - 1
+        cell = max(3, (avail_w + 2) // 30 - 2)
+        total_w = 30 * (cell + 2) - 2
         x0 = (hm_w - total_w) // 2
 
         self._draw_heatmap(cv, x0, 28, avail_w, show_label=False, group_tag="hm_section", cell=cell)
+
+    @staticmethod
+    def _rounded_rect(cv, x1, y1, x2, y2, r=2, **kwargs):
+        """在 Tkinter Canvas 上绘制带圆角的矩形。"""
+        # 当 r 过大时限制为边长的一半
+        r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
+        if r <= 0:
+            return cv.create_rectangle(x1, y1, x2, y2, **kwargs)
+        pts = [
+            x1+r, y1, x2-r, y1,
+            x2, y1, x2, y1+r,
+            x2, y2-r, x2, y2,
+            x2-r, y2, x1+r, y2,
+            x1, y2, x1, y2-r,
+            x1, y1+r, x1, y1,
+        ]
+        return cv.create_polygon(pts, smooth=True, **kwargs)
 
     def _draw_heatmap(self, cv, x0, y0, w, show_label=True, group_tag=None, cell=None):
         """GitHub 风格热力图，30×12 格，最新一日右下角。
@@ -1881,7 +1898,7 @@ class Widget:
             cell: 格子像素大小，默认 5（自动根据 w 计算）
         """
         today = date.today()
-        gap = 1
+        gap = 2
         cols, rows = 30, 12
         if cell is None:
             cell = max(3, (w + gap) // cols - gap)
@@ -1963,12 +1980,14 @@ class Widget:
             return _blend_hex(BG, GREEN, 0.90)
 
         # ── Draw cells ──
+        r = max(1, cell // 5)
         for col, row, ds, total, ch, cm in cell_info:
             x = x0 + col * step
             y = ly + row * step
             tag = f"hm_{col}_{row}"
-            cv.create_rectangle(x, y, x + cell, y + cell, fill=_heat_color(total),
-                                outline="", tags=(tag, group_tag) if group_tag else tag)
+            self._rounded_rect(cv, x, y, x + cell, y + cell, r=r,
+                               fill=_heat_color(total), outline="",
+                               tags=(tag, group_tag) if group_tag else tag)
             cv.tag_bind(tag, "<Enter>",
                 lambda e, ds_=ds, t_=total, ch_=ch, cm_=cm: self._show_heatmap_tooltip(e, ds_, t_, ch_, cm_))
             cv.tag_bind(tag, "<Motion>", lambda e: self._move_bar_tooltip(e))
@@ -1982,8 +2001,8 @@ class Widget:
             (eff_max * 0.625, "⅝"), (eff_max * 0.750, "¾"), (eff_max * 0.875, "⅞"),
         ]):
             lx_i = lx + i * (cell + gap + 28)
-            cv.create_rectangle(lx_i, ly2, lx_i + cell, ly2 + cell,
-                                fill=_heat_color(th), outline="", tags=group_tag)
+            self._rounded_rect(cv, lx_i, ly2, lx_i + cell, ly2 + cell, r=r,
+                               fill=_heat_color(th), outline="", tags=group_tag)
             cv.create_text(lx_i + cell + 4, ly2 + cell // 2, text=lbl,
                            font=("Courier New", 7), fill=W2, anchor="w", tags=group_tag)
 
