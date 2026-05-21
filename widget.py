@@ -1946,13 +1946,21 @@ class Widget:
             if val <= 0 or eff_max <= 0:
                 return _blend_hex(BG, GREEN, 0.04)
             r = val / eff_max
-            if r <= 0.25:
-                return _blend_hex(BG, GREEN, 0.12)
-            elif r <= 0.50:
-                return _blend_hex(BG, GREEN, 0.30)
-            elif r <= 0.75:
-                return _blend_hex(BG, GREEN, 0.55)
-            return _blend_hex(BG, GREEN, 0.85)
+            if r <= 0.125:
+                return _blend_hex(BG, GREEN, 0.08)
+            elif r <= 0.250:
+                return _blend_hex(BG, GREEN, 0.14)
+            elif r <= 0.375:
+                return _blend_hex(BG, GREEN, 0.22)
+            elif r <= 0.500:
+                return _blend_hex(BG, GREEN, 0.32)
+            elif r <= 0.625:
+                return _blend_hex(BG, GREEN, 0.44)
+            elif r <= 0.750:
+                return _blend_hex(BG, GREEN, 0.58)
+            elif r <= 0.875:
+                return _blend_hex(BG, GREEN, 0.74)
+            return _blend_hex(BG, GREEN, 0.90)
 
         # ── Draw cells ──
         for col, row, ds, total, ch, cm in cell_info:
@@ -1969,8 +1977,9 @@ class Widget:
         # ── Legend ──
         lx, ly2 = x0, ly + hm_h + 6
         for i, (th, lbl) in enumerate([
-            (0, "no data"), (eff_max * 0.25, "low"),
-            (eff_max * 0.50, "mid"), (eff_max * 0.75, "high"),
+            (0, "no data"), (eff_max * 0.125, "⅛"), (eff_max * 0.250, "¼"),
+            (eff_max * 0.375, "⅜"), (eff_max * 0.500, "½"),
+            (eff_max * 0.625, "⅝"), (eff_max * 0.750, "¾"), (eff_max * 0.875, "⅞"),
         ]):
             lx_i = lx + i * (cell + gap + 28)
             cv.create_rectangle(lx_i, ly2, lx_i + cell, ly2 + cell,
