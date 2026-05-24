@@ -2006,6 +2006,44 @@ class Widget:
             cv.create_text(lx_i + cell + 4, ly2 + cell // 2, text=lbl,
                            font=("Courier New", 7), fill=W2, anchor="w", tags=group_tag)
 
+    def _get_tooltip_xy(self, event, tt=None, offset_right=14, offset_down=10):
+        """根据鼠标位置和屏幕边界计算 tooltip 的最佳显示位置，确保不超出屏幕。
+
+        默认右下偏移；超出右侧→左下，超出下侧→右上，超出右下→左上。
+        """
+        try:
+            if tt is None:
+                tt = getattr(self, "_tooltip", None)
+            if tt:
+                tt.update_idletasks()
+                tw = tt.winfo_width() or tt.winfo_reqwidth()
+                th = tt.winfo_height() or tt.winfo_reqheight()
+                tt._tw = tw
+                tt._th = th
+            else:
+                tw = th = 0
+        except tk.TclError:
+            return event.x_root + offset_right, event.y_root + offset_down
+
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+
+        x = event.x_root + offset_right
+        y = event.y_root + offset_down
+
+        if tw and x + tw > sw:
+            x = event.x_root - tw - offset_right
+        if th and y + th > sh:
+            y = event.y_root - th - offset_down
+
+        # 极端情况下确保至少有一部分可见
+        if tw:
+            x = max(2, min(x, sw - tw - 2))
+        if th:
+            y = max(2, min(y, sh - th - 2))
+
+        return x, y
+
     def _show_heatmap_tooltip(self, event, date_str, total, cache_hit, cache_miss):
         """Tooltip for heatmap cells."""
         if self._tooltip_after_id:
@@ -2029,7 +2067,8 @@ class Widget:
             lines.append(f"  Cache Hit {cache_hit:>7,} ({pct:.0f}%)")
         text = "\n".join(lines)
         tk.Label(tt, text=text, bg=CARD, fg=W0, font=self.f3, padx=5, pady=4).pack(padx=1, pady=(0, 1))
-        tt.geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+        x, y = self._get_tooltip_xy(event, tt, offset_right=12, offset_down=8)
+        tt.geometry(f"+{x}+{y}")
         tt.attributes("-alpha", 0.0)
         self._tooltip = tt
         self._fade_tooltip(0.0, 1.0, 4, 15)
@@ -2037,13 +2076,15 @@ class Widget:
     # ═══════════ BAR TOOLTIP ═══════════
 
     def _move_bar_tooltip(self, event):
-        """跟随鼠标移动 tooltip 位置"""
+        """跟随鼠标移动 tooltip 位置，自动避开屏幕边缘"""
         tt = getattr(self, "_tooltip", None)
-        if tt:
-            try:
-                tt.geometry(f"+{event.x_root + 14}+{event.y_root + 10}")
-            except tk.TclError:
-                pass
+        if not tt:
+            return
+        try:
+            x, y = self._get_tooltip_xy(event, tt)
+            tt.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
 
     def _show_bar_tooltip(self, event, idx, day):
         """鼠标悬停柱子时弹出详细信息浮窗（淡入）"""
@@ -2089,8 +2130,7 @@ class Widget:
                        padx=6, pady=6)
         lbl.pack(padx=1, pady=(0, 1))
 
-        x = event.x_root + 14
-        y = event.y_root + 10
+        x, y = self._get_tooltip_xy(event, tt)
         tt.geometry(f"+{x}+{y}")
         tt.attributes("-alpha", 0.0)    # 初始透明
         self._tooltip = tt
