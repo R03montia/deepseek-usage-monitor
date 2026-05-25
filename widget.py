@@ -39,6 +39,12 @@ MENU_FG = "#f0f0ff"
 MENU_ABG = "#7dcfff"
 MENU_AFG = "#0f0f1a"
 
+# 5-level heatmap color scale per theme — updated by apply_theme() at runtime.
+HEATMAP = [
+    "#0f0f1a", "#1a3828", "#32705a",
+    "#54aa92", "#9ece6a",
+]
+
 THEMES = {
     "Default": {
         "BG": "#0f0f1a", "CARD": "#19192e",
@@ -49,6 +55,8 @@ THEMES = {
         "PGB": "#2a2a3e", "PGFG": "#7aa2f7", "PGCA": "#e0af68", "PGDA": "#ff6b6b",
         "MB": "#2a2a3e",
         "MENU_BG": "#19192e", "MENU_FG": "#f0f0ff", "MENU_ABG": "#7dcfff", "MENU_AFG": "#0f0f1a",
+        "HEATMAP": ["#0f0f1a", "#1a3828", "#32705a",
+                     "#54aa92", "#9ece6a"],
     },
     "Amber Glow": {
         "BG": "#1a0a05", "CARD": "#2a1410",
@@ -59,6 +67,8 @@ THEMES = {
         "PGB": "#3a2018", "PGFG": "#ff8c42", "PGCA": "#e0a060", "PGDA": "#e05040",
         "MB": "#3a2018",
         "MENU_BG": "#2a1410", "MENU_FG": "#fff0e8", "MENU_ABG": "#ff8c42", "MENU_AFG": "#1a0a05",
+        "HEATMAP": ["#1a0a05", "#2e1830", "#583c68",
+                     "#8a6aa0", "#d162a4"],
     },
     "Frost Blue": {
         "BG": "#0a0f1a", "CARD": "#141e2e",
@@ -69,6 +79,8 @@ THEMES = {
         "PGB": "#1a2540", "PGFG": "#5ba0d0", "PGCA": "#88c0e8", "PGDA": "#e06060",
         "MB": "#1a2540",
         "MENU_BG": "#141e2e", "MENU_FG": "#e8f0ff", "MENU_ABG": "#5ba0d0", "MENU_AFG": "#0a0f1a",
+        "HEATMAP": ["#0a0f1a", "#122640", "#225a84",
+                     "#3c94bc", "#7bc8a4"],
     },
     "Verdant Green": {
         "BG": "#0a120a", "CARD": "#142214",
@@ -79,6 +91,8 @@ THEMES = {
         "PGB": "#1e301e", "PGFG": "#6ab86a", "PGCA": "#b0b040", "PGDA": "#d06050",
         "MB": "#1e301e",
         "MENU_BG": "#142214", "MENU_FG": "#e8f0e8", "MENU_ABG": "#6ab86a", "MENU_AFG": "#0a120a",
+        "HEATMAP": ["#0a120a", "#122c22", "#226450",
+                     "#3c9e82", "#6ab86a"],
     },
     "Soft Pastel": {
         "BG": "#f2ecee", "CARD": "#ffffff",
@@ -89,6 +103,8 @@ THEMES = {
         "PGB": "#e8e0e4", "PGFG": "#55cdfc", "PGCA": "#f7a8b8", "PGDA": "#e06070",
         "MB": "#e8e0e4",
         "MENU_BG": "#ffffff", "MENU_FG": "#1a1020", "MENU_ABG": "#55cdfc", "MENU_AFG": "#ffffff",
+        "HEATMAP": ["#f2ecee", "#ead4dc", "#d6a6b6",
+                     "#b8768e", "#9a4e6c"],
     },
     "Midnight Glow": {
         "BG": "#0a0a0a", "CARD": "#1a1a1a",
@@ -99,6 +115,8 @@ THEMES = {
         "PGB": "#1a1a1a", "PGFG": "#ffa500", "PGCA": "#ffbb40", "PGDA": "#e05050",
         "MB": "#1a1a1a",
         "MENU_BG": "#1a1a1a", "MENU_FG": "#f0f0f0", "MENU_ABG": "#ffa500", "MENU_AFG": "#0a0a0a",
+        "HEATMAP": ["#0a0a0a", "#30201c", "#60503a",
+                     "#928460", "#ffa500"],
     },
 }
 
@@ -1961,23 +1979,15 @@ class Widget:
 
         def _heat_color(val):
             if val <= 0 or eff_max <= 0:
-                return _blend_hex(BG, GREEN, 0.04)
+                return HEATMAP[0]
             r = val / eff_max
-            if r <= 0.125:
-                return _blend_hex(BG, GREEN, 0.08)
-            elif r <= 0.250:
-                return _blend_hex(BG, GREEN, 0.14)
-            elif r <= 0.375:
-                return _blend_hex(BG, GREEN, 0.22)
-            elif r <= 0.500:
-                return _blend_hex(BG, GREEN, 0.32)
-            elif r <= 0.625:
-                return _blend_hex(BG, GREEN, 0.44)
-            elif r <= 0.750:
-                return _blend_hex(BG, GREEN, 0.58)
-            elif r <= 0.875:
-                return _blend_hex(BG, GREEN, 0.74)
-            return _blend_hex(BG, GREEN, 0.90)
+            if r <= 0.25:
+                return HEATMAP[1]
+            elif r <= 0.50:
+                return HEATMAP[2]
+            elif r <= 0.75:
+                return HEATMAP[3]
+            return HEATMAP[4]
 
         # ── Draw cells ──
         r = max(1, cell // 5)
@@ -1996,9 +2006,8 @@ class Widget:
         # ── Legend ──
         lx, ly2 = x0, ly + hm_h + 6
         for i, (th, lbl) in enumerate([
-            (0, "no data"), (eff_max * 0.125, "⅛"), (eff_max * 0.250, "¼"),
-            (eff_max * 0.375, "⅜"), (eff_max * 0.500, "½"),
-            (eff_max * 0.625, "⅝"), (eff_max * 0.750, "¾"), (eff_max * 0.875, "⅞"),
+            (0, "no data"), (eff_max * 0.25, "¼"), (eff_max * 0.50, "½"),
+            (eff_max * 0.75, "¾"), (eff_max * 1.0, "1"),
         ]):
             lx_i = lx + i * (cell + gap + 28)
             self._rounded_rect(cv, lx_i, ly2, lx_i + cell, ly2 + cell, r=r,
