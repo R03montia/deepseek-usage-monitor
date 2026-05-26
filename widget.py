@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from tkinter import font as tkfont
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from itertools import cycle
 import threading
 
@@ -707,7 +707,7 @@ class Widget:
     def _fetch_worker(self):
         """Run API call in background thread, schedule draw on main thread."""
         try:
-            data = self.api.fetch_all(target_date=date.today().isoformat())
+            data = self.api.fetch_all(target_date=datetime.now(timezone.utc).date().isoformat())
             self.root.after(0, self._on_fetch_done, data)
         except Exception as exc:
             self.root.after(0, self._on_fetch_error, str(exc))
@@ -1739,7 +1739,7 @@ class Widget:
         n = len(series)
         gap = max(2, bw // 55)
         bar_w = max(3, (bw - gap * (n - 1)) / n)
-        today_str = date.today().isoformat()
+        today_str = datetime.now(timezone.utc).date().isoformat()
 
         for frac in (0.25, 0.50, 0.75):
             gy = by + int(bh * (1 - frac))
@@ -1826,7 +1826,7 @@ class Widget:
 
         gap = max(2, bw // 55)
         bar_w = max(3, (bw - gap * (n - 1)) / n)
-        today_str = date.today().isoformat()
+        today_str = datetime.now(timezone.utc).date().isoformat()
 
         for i, day in enumerate(series):
             x = bx + i * (bar_w + gap)
@@ -1915,7 +1915,7 @@ class Widget:
         Args:
             cell: 格子像素大小，默认 5（自动根据 w 计算）
         """
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
         gap = 2
         cols, rows = 30, 12
         if cell is None:
@@ -2062,7 +2062,7 @@ class Widget:
             self.root.after_cancel(self._tooltip_fade_id)
             self._tooltip_fade_id = None
         self._hide_bar_tooltip()
-        is_today = date_str == date.today().isoformat()
+        is_today = date_str == datetime.now(timezone.utc).date().isoformat()
         tt = tk.Toplevel(self.root)
         tt.overrideredirect(True)
         tt.attributes("-topmost", True)
@@ -2107,7 +2107,7 @@ class Widget:
         self._last_bar_index = idx
         self._hide_bar_tooltip()  # 立即销毁旧 tooltip
         d = day
-        is_today = d["date"] == date.today().isoformat()
+        is_today = d["date"] == datetime.now(timezone.utc).date().isoformat()
         accent = PGCA if is_today else BLUE
 
         # 用 Toplevel bg 做 1px 外框
